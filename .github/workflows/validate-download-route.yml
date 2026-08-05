@@ -21,8 +21,11 @@ jobs:
         run: |
           @'
           import importlib.util
+          import sys
+          import types
           from pathlib import Path
 
+          sys.modules["requests"] = types.ModuleType("requests")
           path = Path("assets/download_models.py")
           spec = importlib.util.spec_from_file_location("download_models", path)
           module = importlib.util.module_from_spec(spec)
