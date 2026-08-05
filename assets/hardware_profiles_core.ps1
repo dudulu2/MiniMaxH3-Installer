@@ -3,7 +3,11 @@ $script:CatalogPath = Join-Path $script:AssetsRoot "hf_model_inventory.json"
 if (-not (Test-Path -LiteralPath $script:ProfilesPath)) { throw "Installer asset is missing: $script:ProfilesPath" }
 if (-not (Test-Path -LiteralPath $script:CatalogPath)) { throw "Installer asset is missing: $script:CatalogPath" }
 $script:ProfileConfig = Get-Content -LiteralPath $script:ProfilesPath -Raw | ConvertFrom-Json
-$script:ModelCatalog = @(Get-Content -LiteralPath $script:CatalogPath -Raw | ConvertFrom-Json)
+$catalogPayload = Get-Content -LiteralPath $script:CatalogPath -Raw | ConvertFrom-Json
+# Windows PowerShell 5.1 can emit a top-level JSON array as one Object[] pipeline object.
+# Pipe the payload once more to force element-by-element enumeration.
+$script:ModelCatalog = @($catalogPayload | ForEach-Object { $_ })
+if ($script:ModelCatalog.Count -eq 0) { throw "The MiniMax H3 model catalog is empty." }
 $script:Profiles = @($script:ProfileConfig.profiles)
 $script:SelectedProfileId = "auto"
 $script:ProfileConfirmed = $false
@@ -50,14 +54,31 @@ function Get-ProfileRequiredRamBytes {
     return [int64]([double]$Profile.min_ram_gib * 0.94 * 1GB)
 }
 
+function Get-ModelCatalogItem {
+    param([string]$Path)
+    $matches = @($script:ModelCatalog | Where-Object { [string]$_.path -eq $Path })
+    if ($matches.Count -eq 0) { throw "Model is absent from the catalog: $Path" }
+    if ($matches.Count -gt 1) { throw "Model appears more than once in the catalog: $Path" }
+
+    $item = $matches[0]
+    $size = [int64]0
+    if (-not [int64]::TryParse([string]$item.size, [ref]$size) -or $size -le 0) {
+        throw "Model catalog contains an invalid size for $Path."
+    }
+    return [PSCustomObject]@{
+        Path = [string]$item.path
+        Size = $size
+        Sha256 = [string]$item.sha256
+    }
+}
+
 function Get-ProfileModelBytes {
     param($Profile)
     $paths = @($Profile.diffusion_model, $Profile.text_encoder, $Profile.video_vae, $Profile.audio_vae)
     $total = [int64]0
     foreach ($path in $paths) {
-        $item = $script:ModelCatalog | Where-Object { $_.path -eq $path } | Select-Object -First 1
-        if (-not $item) { throw "Profile $($Profile.id) references a model absent from the catalog: $path" }
-        $total += [int64]$item.size
+        $item = Get-ModelCatalogItem -Path ([string]$path)
+        $total += $item.Size
     }
     return $total
 }
