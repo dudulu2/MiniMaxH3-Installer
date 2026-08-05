@@ -43,8 +43,8 @@ jobs:
 
           $expected = @{
             compatibility = [int64]42470585471
-            balanced_4090_32gb = [int64]42470585471
-            quality_64gb = [int64]73107948615
+            balanced_4090_32gb = [int64]42458411463
+            quality_64gb = [int64]73180129632
           }
           foreach ($profile in $script:Profiles) {
             $bytes = Get-ProfileModelBytes $profile
