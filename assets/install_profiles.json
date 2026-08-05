@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "default_profile": "compatibility",
+  "profiles": [
+    {
+      "id": "compatibility",
+      "label": "Compatibility - RTX 3060/4060 and 8-16 GB VRAM",
+      "summary": "Lowest-memory official profile. Recommended for RTX 3060 through 4070-class cards and systems with 16-32 GB RAM.",
+      "min_vram_mib": 7600,
+      "min_ram_gib": 16,
+      "required_free_gib": 60,
+      "megapixels": 0.2,
+      "resolution": "608x352",
+      "duration_seconds": 5,
+      "diffusion_model": "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+      "text_encoder": "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "video_vae": "vae/minimax_h3_video_vae_fp16.safetensors",
+      "audio_vae": "vae/minimax_h3_audio_vae_fp32.safetensors"
+    },
+    {
+      "id": "balanced_4090_32gb",
+      "label": "Balanced - RTX 4090/5090 with 32 GB RAM",
+      "summary": "24 GB+ VRAM profile using the pruned FP8 diffusion model and NVFP4 text encoder. Defaults to 864x480.",
+      "min_vram_mib": 22000,
+      "min_ram_gib": 30,
+      "required_free_gib": 60,
+      "megapixels": 0.4,
+      "resolution": "864x480",
+      "duration_seconds": 5,
+      "diffusion_model": "diffusion_models/minimax_h3_fl2va_pruned_fp8_scaled.safetensors",
+      "text_encoder": "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "video_vae": "vae/minimax_h3_video_vae_fp16.safetensors",
+      "audio_vae": "vae/minimax_h3_audio_vae_fp32.safetensors"
+    },
+    {
+      "id": "quality_64gb",
+      "label": "Quality - 24 GB+ VRAM and 64 GB+ RAM",
+      "summary": "Higher-precision pruned BF16 diffusion model with INT8 text encoder. Defaults to 960x544 and needs substantially more RAM and disk space.",
+      "min_vram_mib": 22000,
+      "min_ram_gib": 60,
+      "required_free_gib": 90,
+      "megapixels": 0.5,
+      "resolution": "960x544",
+      "duration_seconds": 5,
+      "diffusion_model": "diffusion_models/minimax_h3_fl2va_pruned_bf16.safetensors",
+      "text_encoder": "text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+      "video_vae": "vae/minimax_h3_video_vae_fp16.safetensors",
+      "audio_vae": "vae/minimax_h3_audio_vae_fp32.safetensors"
+    }
+  ],
+  "runtimes": {
+    "cuda126": {
+      "label": "PyTorch 2.8.0 CUDA 12.6",
+      "torch": "2.8.0+cu126",
+      "torchvision": "0.23.0+cu126",
+      "torchaudio": "2.8.0+cu126",
+      "cuda_version": "12.6",
+      "index_url": "https://download.pytorch.org/whl/cu126",
+      "mirror_index_url": "https://mirrors.aliyun.com/pytorch-wheels/cu126",
+      "minimum_driver_major": 560
+    },
+    "cuda128": {
+      "label": "PyTorch 2.8.0 CUDA 12.8 (RTX 50 series)",
+      "torch": "2.8.0+cu128",
+      "torchvision": "0.23.0+cu128",
+      "torchaudio": "2.8.0+cu128",
+      "cuda_version": "12.8",
+      "index_url": "https://download.pytorch.org/whl/cu128",
+      "mirror_index_url": "",
+      "minimum_driver_major": 570
+    }
+  }
+}
