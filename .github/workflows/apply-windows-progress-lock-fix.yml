@@ -24,6 +24,9 @@ jobs:
       - name: Apply progress lock fix
         run: python tools/apply_windows_progress_lock_fix.py
 
+      - name: Install test dependency
+        run: python -m pip install requests
+
       - name: Validate Python progress writer
         shell: powershell
         run: |
