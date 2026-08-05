@@ -42,6 +42,13 @@ function Get-RecommendProfileId {
     return "compatibility"
 }
 
+function Get-ProfileRequiredRamBytes {
+    param($Profile)
+    # Windows can report slightly less usable RAM than the installed module capacity.
+    # Keep the displayed profile requirement unchanged while allowing normal 16/32/64 GB systems.
+    return [int64]([double]$Profile.min_ram_gib * 0.94 * 1GB)
+}
+
 function Get-ProfileModelBytes {
     param($Profile)
     $paths = @($Profile.diffusion_model, $Profile.text_encoder, $Profile.video_vae, $Profile.audio_vae)
@@ -165,7 +172,7 @@ function Show-HardwareProfileDialog {
         if ($id -eq "auto") { $id = $snapshot.RecommendedProfileId }
         $profile = Get-ProfileById $id
         $runtime = Get-RuntimeById $snapshot.RuntimeId
-        $meets = ($snapshot.VramMiB -ge [double]$profile.min_vram_mib) -and ($snapshot.RamBytes -ge [int64]([double]$profile.min_ram_gib * 1GB))
+        $meets = ($snapshot.VramMiB -ge [double]$profile.min_vram_mib) -and ($snapshot.RamBytes -ge (Get-ProfileRequiredRamBytes $profile))
         $state = if ($meets) { "Hardware check: compatible" } else { "Hardware check: below this profile's minimum; installation will be blocked" }
         $details.Text = "$(Get-ProfileSummaryText $profile)`nRuntime: $($runtime.label)`n$state"
     }
@@ -224,7 +231,7 @@ function Get-HardwareReport {
     & $add "Windows" ($(if ($is64) { "64-bit" } else { "32-bit" })) ($(if ($is64) { "PASS" } else { "FAIL" })) "Windows 10/11 x64 with a desktop session is required."
 
     if ($snapshot.RamBytes -gt 0) {
-        $requiredRam = [int64]([double]$profile.min_ram_gib * 1GB)
+        $requiredRam = Get-ProfileRequiredRamBytes $profile
         $ramOk = $snapshot.RamBytes -ge $requiredRam
         & $add "System RAM" (Format-GiB $snapshot.RamBytes) ($(if ($ramOk) { "PASS" } else { "FAIL" })) ("Selected profile requires at least {0} GiB RAM." -f $profile.min_ram_gib)
     } else {
@@ -308,7 +315,7 @@ function Show-HardwareReport {
         }
         $profile = Get-ProfileById $report.ProfileId
         $runtime = Get-RuntimeById $report.RuntimeId
-        $subtitle.Text = "$($profile.label) | $($runtime.label) | DynamicVRAM | No SeedVR2"
+        $subtitle.Text = "Profile: $($profile.id) | CUDA $($runtime.cuda_version) | GPU $($report.GpuIndex) | DynamicVRAM"
         if ($report.Blocking) {
             $lblCheck.Text = "Hardware/profile check failed. See the red rows below."
             $lblCheck.ForeColor = [Drawing.Color]::FromArgb(185, 28, 28)

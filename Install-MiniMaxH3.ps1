@@ -895,11 +895,3 @@ if ($SelfTest) {
 }
 
 [void]$form.ShowDialog()
-
-
-
-
-
-
-
-
