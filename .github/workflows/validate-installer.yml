@@ -37,6 +37,7 @@ jobs:
       - name: Validate profile catalog and downloader dry-runs
         shell: pwsh
         run: |
+          python -m pip install --disable-pip-version-check requests
           python -m py_compile assets/download_models.py
           $config = Get-Content assets/install_profiles.json -Raw | ConvertFrom-Json
           foreach ($profile in $config.profiles) {
@@ -90,9 +91,15 @@ jobs:
             $workflow = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
             $resolution = $workflow.nodes | Where-Object { $_.id -eq 115 }
             $main = $workflow.nodes | Where-Object { $_.id -eq 105 }
+            $expectedDiffusion = Split-Path -Leaf $profile.diffusion_model
+            $expectedText = Split-Path -Leaf $profile.text_encoder
             if ([double]$resolution.widgets_values[1] -ne [double]$profile.megapixels) { throw "Megapixel mismatch for $($profile.id)" }
-            if ($main.widgets_values[5] -ne (Split-Path -Leaf $profile.diffusion_model)) { throw "Diffusion mismatch for $($profile.id)" }
-            if ($main.widgets_values[6] -ne (Split-Path -Leaf $profile.text_encoder)) { throw "Text encoder mismatch for $($profile.id)" }
+            if ($main.widgets_values[5] -ne $expectedDiffusion) { throw "Diffusion mismatch for $($profile.id)" }
+            if ($main.widgets_values[6] -ne $expectedText) { throw "Text encoder mismatch for $($profile.id)" }
+            $unet = $workflow.definitions.subgraphs[0].nodes | Where-Object { $_.type -eq 'UNETLoader' }
+            $clip = $workflow.definitions.subgraphs[0].nodes | Where-Object { $_.type -eq 'CLIPLoader' }
+            if ($unet.properties.models[0].name -ne $expectedDiffusion) { throw "UNET metadata mismatch for $($profile.id)" }
+            if ($clip.properties.models[0].name -ne $expectedText) { throw "CLIP metadata mismatch for $($profile.id)" }
           }
 
       - name: Run installer self-test
