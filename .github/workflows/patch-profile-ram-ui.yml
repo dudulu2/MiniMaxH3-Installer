@@ -1,0 +1,86 @@
+name: Patch profile RAM tolerance and UI
+
+on:
+  push:
+    branches:
+      - feat/hardware-profiles
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/hardware-profiles
+
+      - name: Apply profile RAM tolerance and compact status text
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          path = Path('assets/hardware_profiles_core.ps1')
+          text = path.read_text(encoding='utf-8-sig')
+          marker = '''function Get-ProfileModelBytes {'''
+          helper = '''function Get-ProfileRequiredRamBytes {
+              param($Profile)
+              # Windows can report slightly less usable RAM than the installed module capacity.
+              # Keep the displayed profile requirement unchanged while allowing normal 16/32/64 GB systems.
+              return [int64]([double]$Profile.min_ram_gib * 0.94 * 1GB)
+          }
+
+          function Get-ProfileModelBytes {'''
+          if 'function Get-ProfileRequiredRamBytes' not in text:
+              if marker not in text:
+                  raise SystemExit('RAM helper insertion marker not found.')
+              text = text.replace(marker, helper, 1)
+
+          old_dialog = '''$meets = ($snapshot.VramMiB -ge [double]$profile.min_vram_mib) -and ($snapshot.RamBytes -ge [int64]([double]$profile.min_ram_gib * 1GB))'''
+          new_dialog = '''$meets = ($snapshot.VramMiB -ge [double]$profile.min_vram_mib) -and ($snapshot.RamBytes -ge (Get-ProfileRequiredRamBytes $profile))'''
+          if old_dialog in text:
+              text = text.replace(old_dialog, new_dialog, 1)
+
+          old_report = '''$requiredRam = [int64]([double]$profile.min_ram_gib * 1GB)'''
+          new_report = '''$requiredRam = Get-ProfileRequiredRamBytes $profile'''
+          if old_report in text:
+              text = text.replace(old_report, new_report, 1)
+
+          old_subtitle = '''$subtitle.Text = "$($profile.label) | $($runtime.label) | DynamicVRAM | No SeedVR2"'''
+          new_subtitle = '''$subtitle.Text = "Profile: $($profile.id) | CUDA $($runtime.cuda_version) | GPU $($report.GpuIndex) | DynamicVRAM"'''
+          if old_subtitle in text:
+              text = text.replace(old_subtitle, new_subtitle, 1)
+
+          path.write_text(text, encoding='utf-8')
+
+          main = Path('Install-MiniMaxH3.ps1')
+          main_text = main.read_text(encoding='utf-8-sig').rstrip() + '\n'
+          main.write_text(main_text, encoding='utf-8')
+          '@ | python -
+
+      - name: Parse PowerShell files
+        shell: powershell
+        run: |
+          foreach ($path in @('Install-MiniMaxH3.ps1','assets/hardware_profiles_core.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Error
+              exit 1
+            }
+          }
+
+      - name: Commit patch
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Install-MiniMaxH3.ps1 assets/hardware_profiles_core.ps1
+          if (git diff --cached --quiet) { exit 0 }
+          git commit -m "Allow normal installed RAM reporting and compact profile status"
+          git push origin HEAD:feat/hardware-profiles
