@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - feature/parallel-model-downloads
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -52,6 +55,7 @@ jobs:
           python assets/download_models.py --comfy-root test-output --status test-status.json --catalog assets/hf_model_inventory.json --profiles assets/install_profiles.json --profile compatibility --source-order mirror-first --download-mode auto --dry-run
 
       - name: Commit patched PowerShell files
+        if: github.event_name == 'push'
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
