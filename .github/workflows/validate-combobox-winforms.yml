@@ -1,0 +1,59 @@
+name: Validate profile ComboBox
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-combobox:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse profile module
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'assets/hardware_profiles_core.ps1'), [ref]$tokens, [ref]$errors)
+          if ($errors.Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
+
+      - name: Exercise real Windows PowerShell 5.1 ComboBox
+        shell: powershell
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms
+          $script:AssetsRoot = (Resolve-Path 'assets').Path
+          . (Join-Path $script:AssetsRoot 'hardware_profiles_core.ps1')
+
+          $choices = New-Object System.Collections.ArrayList
+          [void]$choices.Add([PSCustomObject]@{ Id='auto'; Label='Auto' })
+          [void]$choices.Add([PSCustomObject]@{ Id='compatibility'; Label='Compatibility' })
+          [void]$choices.Add([PSCustomObject]@{ Id='balanced_4090_32gb'; Label='Balanced' })
+
+          $combo = New-Object Windows.Forms.ComboBox
+          Initialize-ProfileComboBox -Combo $combo -Choices $choices -SelectedId 'balanced_4090_32gb'
+          if ($combo.Items.Count -ne 3) { throw "Expected 3 synchronous items, got $($combo.Items.Count)." }
+          if ($combo.SelectedIndex -ne 2) { throw "Expected selected index 2, got $($combo.SelectedIndex)." }
+          if ((Get-ProfileChoiceId $combo) -ne 'balanced_4090_32gb') { throw 'Selected profile ID was not preserved.' }
+
+          $fallback = New-Object Windows.Forms.ComboBox
+          Initialize-ProfileComboBox -Combo $fallback -Choices $choices -SelectedId 'unknown-profile'
+          if ($fallback.SelectedIndex -ne 0) { throw "Unknown profile must fall back to index 0, got $($fallback.SelectedIndex)." }
+          if ((Get-ProfileChoiceId $fallback) -ne 'auto') { throw 'Unknown profile did not fall back to auto.' }
+
+          $empty = New-Object Windows.Forms.ComboBox
+          $threw = $false
+          try {
+            Initialize-ProfileComboBox -Combo $empty -Choices @() -SelectedId 'auto'
+          } catch {
+            $threw = $true
+          }
+          if (-not $threw) { throw 'An empty profile list must fail with a controlled exception.' }

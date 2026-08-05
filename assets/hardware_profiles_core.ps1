@@ -132,6 +132,37 @@ function Get-ProfileChoiceId {
     return $id
 }
 
+function Initialize-ProfileComboBox {
+    param($Combo, $Choices, [string]$SelectedId)
+    if (-not $Combo) { throw "Profile ComboBox is missing." }
+
+    $Combo.BeginUpdate()
+    try {
+        $Combo.DataSource = $null
+        $Combo.Items.Clear()
+        $Combo.DisplayMember = "Label"
+        foreach ($choice in @($Choices)) {
+            if ($choice) { [void]$Combo.Items.Add($choice) }
+        }
+        if ($Combo.Items.Count -eq 0) {
+            throw "No installation profiles are available."
+        }
+
+        $selectedIndex = 0
+        for ($i = 0; $i -lt $Combo.Items.Count; $i++) {
+            $item = $Combo.Items[$i]
+            $idProperty = $item.PSObject.Properties["Id"]
+            if ($idProperty -and [string]$idProperty.Value -eq [string]$SelectedId) {
+                $selectedIndex = $i
+                break
+            }
+        }
+        $Combo.SelectedIndex = $selectedIndex
+    } finally {
+        $Combo.EndUpdate()
+    }
+}
+
 function Get-ProfileSummaryText {
     param($Profile)
     $bytes = Get-ProfileModelBytes $Profile
@@ -176,17 +207,8 @@ function Show-HardwareProfileDialog {
         [void]$choices.Add([PSCustomObject]@{ Id=[string]$profile.id; Label=[string]$profile.label })
     }
     $combo.DisplayMember = "Label"
-    $combo.ValueMember = "Id"
-    $combo.DataSource = $choices
-    $selectedIndex = 0
-    for ($i = 0; $i -lt $choices.Count; $i++) {
-        if ([string]$choices[$i].Id -eq [string]$script:SelectedProfileId) {
-            $selectedIndex = $i
-            break
-        }
-    }
-    $combo.SelectedIndex = $selectedIndex
     $dialog.Controls.Add($combo)
+    Initialize-ProfileComboBox -Combo $combo -Choices $choices -SelectedId $script:SelectedProfileId
 
     $details = New-Object Windows.Forms.Label
     $details.Location = New-Object Drawing.Point(22, 176)
