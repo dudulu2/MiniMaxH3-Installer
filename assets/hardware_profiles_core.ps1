@@ -36,9 +36,10 @@ function Get-RuntimeIdForGpu {
 }
 
 function Get-RecommendProfileId {
-    param([double]$VramMiB, [int64]$RamBytes)
+    param([double]$VramMiB, [int64]$RamBytes, [string]$GpuName)
     if ($VramMiB -ge 22000 -and $RamBytes -ge [int64](60GB)) { return "quality_64gb" }
-    if ($VramMiB -ge 22000 -and $RamBytes -ge [int64](30GB)) { return "balanced_4090_32gb" }
+    $fp8Preferred = ($GpuName -match '(?i)RTX\s*40\d{2}') -or (Test-IsBlackwellGpu $GpuName)
+    if ($fp8Preferred -and $VramMiB -ge 22000 -and $RamBytes -ge [int64](30GB)) { return "balanced_4090_32gb" }
     return "compatibility"
 }
 
@@ -99,7 +100,7 @@ function Get-HardwareSnapshot {
         VramMiB = $vramMiB
         Driver = $driver
         NvidiaSmiFound = [bool]$smi
-        RecommendedProfileId = (Get-RecommendProfileId -VramMiB $vramMiB -RamBytes $ramBytes)
+        RecommendedProfileId = (Get-RecommendProfileId -VramMiB $vramMiB -RamBytes $ramBytes -GpuName $gpuName)
         RuntimeId = (Get-RuntimeIdForGpu -GpuName $gpuName)
     }
 }
