@@ -1,0 +1,86 @@
+name: Patch profile workflow metadata
+
+on:
+  push:
+    branches:
+      - feat/hardware-profiles
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/hardware-profiles
+
+      - name: Update generated workflow model metadata
+        shell: pwsh
+        run: |
+          $path = 'assets/hardware_profiles_install.ps1'
+          $text = Get-Content -LiteralPath $path -Raw
+          $old = @'
+                  if ($node.type -eq "UNETLoader") { $node.widgets_values[0] = $diffusionName }
+                  elseif ($node.type -eq "CLIPLoader") { $node.widgets_values[0] = $textEncoderName }
+                  elseif ($node.type -eq "VAELoader") {
+                      if ([string]$node.widgets_values[0] -match "audio") { $node.widgets_values[0] = $audioVaeName }
+                      else { $node.widgets_values[0] = $videoVaeName }
+                  }
+          '@
+          $new = @'
+                  if ($node.type -eq "UNETLoader") {
+                      $node.widgets_values[0] = $diffusionName
+                      if ($node.properties -and $node.properties.models) {
+                          $node.properties.models[0].name = $diffusionName
+                          $node.properties.models[0].url = "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/$($Profile.diffusion_model)"
+                          $node.properties.models[0].directory = "diffusion_models"
+                      }
+                  }
+                  elseif ($node.type -eq "CLIPLoader") {
+                      $node.widgets_values[0] = $textEncoderName
+                      if ($node.properties -and $node.properties.models) {
+                          $node.properties.models[0].name = $textEncoderName
+                          $node.properties.models[0].url = "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/$($Profile.text_encoder)"
+                          $node.properties.models[0].directory = "text_encoders"
+                      }
+                  }
+                  elseif ($node.type -eq "VAELoader") {
+                      $isAudioVae = [string]$node.widgets_values[0] -match "audio"
+                      $selectedName = if ($isAudioVae) { $audioVaeName } else { $videoVaeName }
+                      $selectedPath = if ($isAudioVae) { $Profile.audio_vae } else { $Profile.video_vae }
+                      $node.widgets_values[0] = $selectedName
+                      if ($node.properties -and $node.properties.models) {
+                          $node.properties.models[0].name = $selectedName
+                          $node.properties.models[0].url = "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/$selectedPath"
+                          $node.properties.models[0].directory = "vae"
+                      }
+                  }
+          '@
+          if (-not $text.Contains($old)) { throw 'Expected loader block was not found.' }
+          $text = $text.Replace($old, $new)
+          Set-Content -LiteralPath $path -Value $text -Encoding UTF8
+
+      - name: Parse module
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'assets/hardware_profiles_install.ps1'), [ref]$tokens, [ref]$errors)
+          if ($errors.Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
+
+      - name: Commit metadata repair
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets/hardware_profiles_install.ps1
+          if (git diff --cached --quiet) { exit 0 }
+          git commit -m "Update generated workflow model metadata"
+          git push origin HEAD:feat/hardware-profiles
