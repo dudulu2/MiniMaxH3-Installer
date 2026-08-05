@@ -1,0 +1,55 @@
+name: Validate PowerShell 5.1 model catalog
+
+on:
+  push:
+    branches:
+      - main
+      - fix/powershell51-catalog-array
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-catalog:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse profile module
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'assets/hardware_profiles_core.ps1'), [ref]$tokens, [ref]$errors)
+          if ($errors.Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
+
+      - name: Exercise JSON catalog with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $script:AssetsRoot = (Resolve-Path 'assets').Path
+          . (Join-Path $script:AssetsRoot 'hardware_profiles_core.ps1')
+
+          if ($script:ModelCatalog.Count -lt 10) {
+            throw "Catalog was not flattened; count is $($script:ModelCatalog.Count)."
+          }
+          foreach ($entry in $script:ModelCatalog) {
+            if ($entry -is [System.Array]) { throw 'Catalog contains a nested Object[] entry.' }
+            if ([string]::IsNullOrWhiteSpace([string]$entry.path)) { throw 'Catalog entry path is empty.' }
+          }
+
+          $expected = @{
+            compatibility = [int64]42470585471
+            balanced_4090_32gb = [int64]42470585471
+            quality_64gb = [int64]73107948615
+          }
+          foreach ($profile in $script:Profiles) {
+            $bytes = Get-ProfileModelBytes $profile
+            if ($bytes -isnot [int64]) { throw "Model byte total for $($profile.id) is not Int64." }
+            if ($bytes -ne $expected[$profile.id]) { throw "Unexpected total for $($profile.id): $bytes" }
+            $summary = Get-ProfileSummaryText $profile
+            if ($summary -notmatch '^Models ') { throw "Profile summary failed for $($profile.id)." }
+          }
