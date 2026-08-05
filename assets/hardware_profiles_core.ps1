@@ -107,8 +107,29 @@ function Get-HardwareSnapshot {
 
 function Resolve-SelectedProfileId {
     param($Snapshot)
-    if ($script:SelectedProfileId -eq "auto") { return $Snapshot.RecommendedProfileId }
-    return $script:SelectedProfileId
+    $selected = [string]$script:SelectedProfileId
+    if ([string]::IsNullOrWhiteSpace($selected) -or $selected -eq "auto") {
+        return $Snapshot.RecommendedProfileId
+    }
+    $known = $script:Profiles | Where-Object { $_.id -eq $selected } | Select-Object -First 1
+    if (-not $known) { return $Snapshot.RecommendedProfileId }
+    return $selected
+}
+
+function Get-ProfileChoiceId {
+    param($Combo)
+    $id = ""
+    if ($Combo -and $Combo.SelectedItem) {
+        $idProperty = $Combo.SelectedItem.PSObject.Properties["Id"]
+        if ($idProperty) { $id = [string]$idProperty.Value }
+    }
+    if ([string]::IsNullOrWhiteSpace($id) -and $Combo) {
+        $id = [string]$Combo.SelectedValue
+    }
+    if ([string]::IsNullOrWhiteSpace($id) -or $id -eq "auto") { return "auto" }
+    $known = $script:Profiles | Where-Object { $_.id -eq $id } | Select-Object -First 1
+    if (-not $known) { return "auto" }
+    return $id
 }
 
 function Get-ProfileSummaryText {
@@ -157,8 +178,14 @@ function Show-HardwareProfileDialog {
     $combo.DisplayMember = "Label"
     $combo.ValueMember = "Id"
     $combo.DataSource = $choices
-    $combo.SelectedValue = $script:SelectedProfileId
-    if (-not $combo.SelectedValue) { $combo.SelectedValue = "auto" }
+    $selectedIndex = 0
+    for ($i = 0; $i -lt $choices.Count; $i++) {
+        if ([string]$choices[$i].Id -eq [string]$script:SelectedProfileId) {
+            $selectedIndex = $i
+            break
+        }
+    }
+    $combo.SelectedIndex = $selectedIndex
     $dialog.Controls.Add($combo)
 
     $details = New-Object Windows.Forms.Label
@@ -168,18 +195,6 @@ function Show-HardwareProfileDialog {
     $details.Padding = New-Object Windows.Forms.Padding(10)
     $dialog.Controls.Add($details)
 
-    $updateDetails = {
-        $id = [string]$combo.SelectedValue
-        if ($id -eq "auto") { $id = $snapshot.RecommendedProfileId }
-        $profile = Get-ProfileById $id
-        $runtime = Get-RuntimeById $snapshot.RuntimeId
-        $meets = ($snapshot.VramMiB -ge [double]$profile.min_vram_mib) -and ($snapshot.RamBytes -ge (Get-ProfileRequiredRamBytes $profile))
-        $state = if ($meets) { "Hardware check: compatible" } else { "Hardware check: below this profile's minimum; installation will be blocked" }
-        $details.Text = "$(Get-ProfileSummaryText $profile)`nRuntime: $($runtime.label)`n$state"
-    }
-    $combo.Add_SelectedIndexChanged($updateDetails)
-    & $updateDetails
-
     $ok = New-Object Windows.Forms.Button
     $ok.Text = "Use this configuration"
     $ok.DialogResult = [Windows.Forms.DialogResult]::OK
@@ -188,9 +203,27 @@ function Show-HardwareProfileDialog {
     $dialog.Controls.Add($ok)
     $dialog.AcceptButton = $ok
 
+    $updateDetails = {
+        try {
+            $choiceId = Get-ProfileChoiceId $combo
+            $resolvedId = if ($choiceId -eq "auto") { $snapshot.RecommendedProfileId } else { $choiceId }
+            $profile = Get-ProfileById $resolvedId
+            $runtime = Get-RuntimeById $snapshot.RuntimeId
+            $meets = ($snapshot.VramMiB -ge [double]$profile.min_vram_mib) -and ($snapshot.RamBytes -ge (Get-ProfileRequiredRamBytes $profile))
+            $state = if ($meets) { "Hardware check: compatible" } else { "Hardware check: below this profile's minimum; installation will be blocked" }
+            $details.Text = "$(Get-ProfileSummaryText $profile)`nRuntime: $($runtime.label)`n$state"
+            $ok.Enabled = $true
+        } catch {
+            $details.Text = "Could not load the selected profile.`n$($_.Exception.Message)"
+            $ok.Enabled = $false
+        }
+    }
+    $combo.Add_SelectedIndexChanged($updateDetails)
+    & $updateDetails
+
     $result = $dialog.ShowDialog($form)
     if ($result -eq [Windows.Forms.DialogResult]::OK) {
-        $script:SelectedProfileId = [string]$combo.SelectedValue
+        $script:SelectedProfileId = Get-ProfileChoiceId $combo
         $script:ProfileConfirmed = $true
     }
     $dialog.Dispose()
