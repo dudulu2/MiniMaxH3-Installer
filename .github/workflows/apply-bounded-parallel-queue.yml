@@ -1,0 +1,33 @@
+name: Apply bounded parallel queue patch
+
+on:
+  push:
+    branches:
+      - feature/parallel-model-downloads
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/parallel-model-downloads
+      - name: Apply patch
+        run: python tools/apply_bounded_parallel_queue.py
+      - name: Validate syntax
+        run: |
+          python -m pip install requests
+          python -m py_compile assets/download_models.py
+      - name: Commit patched downloader
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets/download_models.py
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Bound parallel range scheduling and degrade promptly"
+          git push origin HEAD:feature/parallel-model-downloads
