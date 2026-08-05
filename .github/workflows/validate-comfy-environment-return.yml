@@ -1,0 +1,66 @@
+name: Validate Comfy environment return contract
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-comfy-environment-return:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate Windows PowerShell 5.1 return contract
+        shell: powershell
+        run: |
+          $path = Resolve-Path 'assets/hardware_profiles_install.ps1'
+          $tokens = $null
+          $errors = $null
+          $ast = [Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
+
+          $helperAst = $ast.Find({
+            param($node)
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Resolve-ComfyEnvironmentResult'
+          }, $true)
+          if (-not $helperAst) { throw 'Resolve-ComfyEnvironmentResult is missing.' }
+          Invoke-Expression $helperAst.Extent.Text
+
+          $expected = [PSCustomObject]@{ ComfyRoot = 'C:\ComfyUI'; Python = 'C:\Python\python.exe' }
+          $resolved = Resolve-ComfyEnvironmentResult -Output @(0, 'noise', $expected)
+          if ($resolved.ComfyRoot -ne $expected.ComfyRoot -or $resolved.Python -ne $expected.Python) {
+            throw 'The resolver did not select the unique environment object.'
+          }
+
+          $failed = $false
+          try { Resolve-ComfyEnvironmentResult -Output @(0, 'noise') | Out-Null } catch { $failed = $true }
+          if (-not $failed) { throw 'The resolver accepted output without an environment object.' }
+
+          $failed = $false
+          try { Resolve-ComfyEnvironmentResult -Output @($expected, $expected) | Out-Null } catch { $failed = $true }
+          if (-not $failed) { throw 'The resolver accepted multiple environment objects.' }
+
+          $installAst = $ast.Find({
+            param($node)
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Install-ComfyEnvironment'
+          }, $true)
+          if (-not $installAst) { throw 'Install-ComfyEnvironment is missing.' }
+          if ($installAst.Extent.Text -match '(?m)^\s+Invoke-(PipWithFallback|ProcessChecked)\s') {
+            throw 'Install-ComfyEnvironment contains an unsuppressed helper invocation.'
+          }
+
+          $invokeInstallAst = $ast.Find({
+            param($node)
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-Install'
+          }, $true)
+          if ($invokeInstallAst.Extent.Text -notmatch 'Resolve-ComfyEnvironmentResult') {
+            throw 'Invoke-Install does not validate the environment result.'
+          }
