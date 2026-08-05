@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - fix/windows-model-progress-lock
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -56,7 +59,6 @@ jobs:
 
               module.os.replace = always_locked
               module.write_status(status, {"phase": "verify", "file_bytes": 456})
-              # Status updates are non-critical: a permanent lock must not raise.
               assert json.loads(status.read_text(encoding="utf-8"))["file_bytes"] == 123
           '@ | python -
 
