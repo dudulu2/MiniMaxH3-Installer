@@ -244,7 +244,9 @@ function Invoke-ProcessChecked {
     if ($process.ExitCode -ne 0 -and -not $AllowFailure) {
         throw "Command failed with exit code $($process.ExitCode): $FilePath"
     }
-    return $process.ExitCode
+    if ($AllowFailure) {
+        return [int]$process.ExitCode
+    }
 }
 
 function New-HttpClient {
@@ -266,7 +268,7 @@ function Invoke-SimpleDownload {
         try {
             Add-Log "Downloading $Name from $url"
             $response = $client.GetAsync($url, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).Result
-            $response.EnsureSuccessStatusCode()
+            [void]$response.EnsureSuccessStatusCode()
             $input = $response.Content.ReadAsStreamAsync().Result
             $output = New-Object IO.FileStream($Destination, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
             try {
@@ -345,7 +347,7 @@ function Invoke-ModelDownload {
                 if ($offset -gt 0 -and $response.StatusCode -ne [Net.HttpStatusCode]::PartialContent) {
                     throw "The server did not honor the resume range request."
                 }
-                $response.EnsureSuccessStatusCode()
+                [void]$response.EnsureSuccessStatusCode()
                 $stream = $response.Content.ReadAsStreamAsync().Result
                 $mode = if ($offset -eq 0) { [IO.FileMode]::Create } else { [IO.FileMode]::Append }
                 $file = New-Object IO.FileStream($Destination, $mode, [IO.FileAccess]::Write, [IO.FileShare]::Read)
@@ -417,7 +419,7 @@ function Install-PythonRuntime {
     $cache = Join-Path $InstallRoot "downloads"
     $installer = Join-Path $cache "python-3.10.11-amd64.exe"
     Set-Stage "Downloading Python 3.10 runtime" -1
-    Invoke-SimpleDownload "Python 3.10.11" @(
+    $null = Invoke-SimpleDownload "Python 3.10.11" @(
         "https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe",
         "https://registry.npmmirror.com/-/binary/python/3.10.11/python-3.10.11-amd64.exe"
     ) $installer
@@ -428,7 +430,7 @@ function Install-PythonRuntime {
     Add-Log "Python installer signature verified: $($signature.SignerCertificate.Subject)"
     Set-Stage "Installing private Python runtime" -1
     $arguments = "/quiet InstallAllUsers=0 Include_launcher=0 Include_test=0 Include_doc=0 AssociateFiles=0 Shortcuts=0 PrependPath=0 Include_pip=1 TargetDir=`"$pythonRoot`""
-    Invoke-ProcessChecked $installer $arguments $InstallRoot
+    $null = Invoke-ProcessChecked $installer $arguments $InstallRoot
     if (-not (Test-Path -LiteralPath $python)) { throw "Python installation did not create $python" }
     return $python
 }
