@@ -137,12 +137,33 @@ function New-ProfileWorkflow {
 
     foreach ($subgraph in @($workflow.definitions.subgraphs)) {
         foreach ($node in @($subgraph.nodes)) {
-            if ($node.type -eq "UNETLoader") { $node.widgets_values[0] = $diffusionName }
-            elseif ($node.type -eq "CLIPLoader") { $node.widgets_values[0] = $textEncoderName }
-            elseif ($node.type -eq "VAELoader") {
-                if ([string]$node.widgets_values[0] -match "audio") { $node.widgets_values[0] = $audioVaeName }
-                else { $node.widgets_values[0] = $videoVaeName }
-            }
+            if ($node.type -eq "UNETLoader") {
+      $node.widgets_values[0] = $diffusionName
+      if ($node.properties -and $node.properties.models) {
+          $node.properties.models[0].name = $diffusionName
+          $node.properties.models[0].url = "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/$($Profile.diffusion_model)"
+          $node.properties.models[0].directory = "diffusion_models"
+      }
+  }
+  elseif ($node.type -eq "CLIPLoader") {
+      $node.widgets_values[0] = $textEncoderName
+      if ($node.properties -and $node.properties.models) {
+          $node.properties.models[0].name = $textEncoderName
+          $node.properties.models[0].url = "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/$($Profile.text_encoder)"
+          $node.properties.models[0].directory = "text_encoders"
+      }
+  }
+  elseif ($node.type -eq "VAELoader") {
+      $isAudioVae = [string]$node.widgets_values[0] -match "audio"
+      $selectedName = if ($isAudioVae) { $audioVaeName } else { $videoVaeName }
+      $selectedPath = if ($isAudioVae) { $Profile.audio_vae } else { $Profile.video_vae }
+      $node.widgets_values[0] = $selectedName
+      if ($node.properties -and $node.properties.models) {
+          $node.properties.models[0].name = $selectedName
+          $node.properties.models[0].url = "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/$selectedPath"
+          $node.properties.models[0].directory = "vae"
+      }
+  }
         }
     }
 
