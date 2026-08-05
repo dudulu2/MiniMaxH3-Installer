@@ -1,0 +1,7 @@
+# Generated artifacts
+__pycache__/
+*.pyc
+*.pyo
+assets/ComfyUI-source/
+downloads/
+logs/
