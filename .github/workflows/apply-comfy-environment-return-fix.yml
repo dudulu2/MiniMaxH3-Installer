@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - fix/comfy-environment-return
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
