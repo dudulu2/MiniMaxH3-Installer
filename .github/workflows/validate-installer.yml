@@ -34,7 +34,7 @@ jobs:
             }
           }
 
-      - name: Validate hardware recommendation matrix
+      - name: Validate hardware recommendation and profile selection
         shell: powershell
         run: |
           $script:AssetsRoot = (Resolve-Path 'assets').Path
@@ -43,6 +43,7 @@ jobs:
           function Format-GiB { param([int64]$Bytes); return "{0:N1} GiB" -f ($Bytes / 1GB) }
           function Get-DriveFreeBytes { param([string]$Path); return [int64](200GB) }
           . (Join-Path $script:AssetsRoot 'hardware_profiles_core.ps1')
+
           $cases = @(
             @('NVIDIA GeForce RTX 3060', 12288, [int64](32GB), 'compatibility', 'cuda126'),
             @('NVIDIA GeForce RTX 3090', 24576, [int64](32GB), 'compatibility', 'cuda126'),
@@ -56,6 +57,27 @@ jobs:
             if ($profile -ne $case[3]) { throw "Profile recommendation mismatch for $($case[0]): $profile" }
             if ($runtime -ne $case[4]) { throw "Runtime recommendation mismatch for $($case[0]): $runtime" }
           }
+
+          $emptyChoice = [PSCustomObject]@{ SelectedItem = $null; SelectedValue = $null }
+          if ((Get-ProfileChoiceId $emptyChoice) -ne 'auto') { throw 'Empty ComboBox selection must resolve to auto.' }
+
+          $unknownChoice = [PSCustomObject]@{
+            SelectedItem = [PSCustomObject]@{ Id = 'not-a-profile' }
+            SelectedValue = 'not-a-profile'
+          }
+          if ((Get-ProfileChoiceId $unknownChoice) -ne 'auto') { throw 'Unknown ComboBox selection must resolve to auto.' }
+
+          $knownChoice = [PSCustomObject]@{
+            SelectedItem = [PSCustomObject]@{ Id = 'balanced_4090_32gb' }
+            SelectedValue = 'balanced_4090_32gb'
+          }
+          if ((Get-ProfileChoiceId $knownChoice) -ne 'balanced_4090_32gb') { throw 'Known ComboBox selection was not preserved.' }
+
+          $snapshot = [PSCustomObject]@{ RecommendedProfileId = 'compatibility' }
+          $script:SelectedProfileId = ''
+          if ((Resolve-SelectedProfileId $snapshot) -ne 'compatibility') { throw 'Blank stored selection must fall back to recommendation.' }
+          $script:SelectedProfileId = 'not-a-profile'
+          if ((Resolve-SelectedProfileId $snapshot) -ne 'compatibility') { throw 'Unknown stored selection must fall back to recommendation.' }
 
       - name: Validate profile catalog and downloader dry-runs
         shell: pwsh
