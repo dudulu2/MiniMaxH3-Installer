@@ -101,15 +101,15 @@ function Install-ComfyEnvironment {
     $venvPython = Join-Path $venvRoot "Scripts\python.exe"
     if (-not (Test-Path -LiteralPath $venvPython)) {
         Set-Stage "Creating isolated Python environment" -1
-        Invoke-ProcessChecked $BasePython ("-m venv `"{0}`"" -f $venvRoot) $InstallRoot
+        $null = Invoke-ProcessChecked $BasePython ("-m venv `"{0}`"" -f $venvRoot) $InstallRoot
     }
 
     Set-Stage "Preparing pip" -1
-    Invoke-PipWithFallback $venvPython "install pip==25.1.1 setuptools wheel" $Runtime
+    $null = Invoke-PipWithFallback $venvPython "install pip==25.1.1 setuptools wheel" $Runtime
 
     Set-Stage ("Installing {0}" -f $Runtime.label) -1
     $torchPackages = "install torch==$($Runtime.torch) torchvision==$($Runtime.torchvision) torchaudio==$($Runtime.torchaudio) --upgrade"
-    Invoke-PipWithFallback $venvPython $torchPackages $Runtime -NeedsTorchIndex
+    $null = Invoke-PipWithFallback $venvPython $torchPackages $Runtime -NeedsTorchIndex
 
     $constraints = Join-Path $InstallRoot "runtime\constraints-selected.txt"
     @"
@@ -122,12 +122,29 @@ comfyui-workflow-templates==0.11.27
 
     Set-Stage "Installing ComfyUI dependencies" -1
     $requirements = Join-Path $comfyRoot "requirements.txt"
-    Invoke-PipWithFallback $venvPython ("install -r `"{0}`" -c `"{1}`"" -f $requirements, $constraints) $Runtime
+    $null = Invoke-PipWithFallback $venvPython ("install -r `"{0}`" -c `"{1}`"" -f $requirements, $constraints) $Runtime
 
     Set-Stage "Verifying CUDA environment" -1
     $verifyCode = "import torch,torchvision,torchaudio; assert torch.__version__=='$($Runtime.torch)'; assert torchvision.__version__=='$($Runtime.torchvision)'; assert torchaudio.__version__=='$($Runtime.torchaudio)'; assert torch.cuda.is_available(); assert str(torch.version.cuda).startswith('$($Runtime.cuda_version)'); print(torch.cuda.get_device_name(0)); print('CUDA '+str(torch.version.cuda)+' ready')"
-    Invoke-ProcessChecked $venvPython ("-c `"{0}`"" -f $verifyCode) $comfyRoot
+    $null = Invoke-ProcessChecked $venvPython ("-c `"{0}`"" -f $verifyCode) $comfyRoot
     return [PSCustomObject]@{ ComfyRoot=$comfyRoot; Python=$venvPython }
+}
+
+function Resolve-ComfyEnvironmentResult {
+    param([object[]]$Output)
+
+    $matches = @($Output | Where-Object {
+        $_ -and
+        $_.PSObject.Properties["ComfyRoot"] -and
+        $_.PSObject.Properties["Python"]
+    })
+    if ($matches.Count -ne 1) {
+        $types = @($Output | ForEach-Object {
+            if ($null -eq $_) { "<null>" } else { $_.GetType().FullName }
+        }) -join ", "
+        throw "ComfyUI environment setup returned an invalid result. Expected one environment object, received $($Output.Count) value(s): $types"
+    }
+    return $matches[0]
 }
 
 function Install-H3Models {
@@ -430,7 +447,8 @@ function Invoke-Install {
         Add-Log "No SeedVR2, xformers, SageAttention, FlashAttention, Triton, or custom compute nodes will be installed."
 
         $basePython = Install-PythonRuntime $installRoot
-        $environment = Install-ComfyEnvironment $installRoot $basePython $runtime
+        $environmentOutput = @(Install-ComfyEnvironment $installRoot $basePython $runtime)
+        $environment = Resolve-ComfyEnvironmentResult -Output $environmentOutput
         Install-H3Models $environment.ComfyRoot $environment.Python $installRoot $profile
         Set-Stage "Deploying selected workflow and one-click launcher" -1
         Install-WorkflowAndLauncher $installRoot $environment.ComfyRoot $environment.Python $profile $runtime $report.GpuIndex
