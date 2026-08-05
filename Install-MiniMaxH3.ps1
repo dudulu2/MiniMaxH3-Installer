@@ -524,6 +524,16 @@ function Install-H3Models {
     if ($process.ExitCode -ne 0) { throw "Model downloader failed with exit code $($process.ExitCode). See the installer log." }
 }
 
+function Assert-PowerShellScriptSyntax {
+    param([string]$Path)
+    $tokens = $null
+    $parseErrors = $null
+    [void][Management.Automation.Language.Parser]::ParseFile($Path, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors -and $parseErrors.Count -gt 0) {
+        $details = ($parseErrors | ForEach-Object { "Line $($_.Extent.StartLineNumber): $($_.Message)" }) -join "; "
+        throw "Generated PowerShell script failed syntax validation: $Path. $details"
+    }
+}
 function Install-WorkflowAndLauncher {
     param([string]$InstallRoot, [string]$ComfyRoot, [string]$VenvPython)
     $workflowSource = Join-Path $script:AssetsRoot "MiniMax_H3_8GB.json"
@@ -615,7 +625,7 @@ exit 1
 `$pidFile = '$escapedRoot\runtime\comfyui.pid'
 if (Test-Path -LiteralPath `$pidFile) {
     `$targetPid = [int](Get-Content -LiteralPath `$pidFile -Raw)
-    $proc = Get-Process -Id `$targetPid -ErrorAction SilentlyContinue
+    `$proc = Get-Process -Id `$targetPid -ErrorAction SilentlyContinue
     if (`$proc -and `$proc.Path -and `$proc.Path.StartsWith('$escapedRoot', [StringComparison]::OrdinalIgnoreCase)) {
         & taskkill.exe /PID `$targetPid /T /F | Out-Null
     } elseif (`$proc) {
@@ -624,6 +634,9 @@ if (Test-Path -LiteralPath `$pidFile) {
     Remove-Item -LiteralPath `$pidFile -Force -ErrorAction SilentlyContinue
 }
 "@ | Set-Content -LiteralPath $stopPs1 -Encoding UTF8
+
+    Assert-PowerShellScriptSyntax $startPs1
+    Assert-PowerShellScriptSyntax $stopPs1
 
     $startBat = Join-Path $InstallRoot "Start MiniMax H3.bat"
     $stopBat = Join-Path $InstallRoot "Stop MiniMax H3.bat"
@@ -879,3 +892,4 @@ if ($SelfTest) {
 }
 
 [void]$form.ShowDialog()
+
