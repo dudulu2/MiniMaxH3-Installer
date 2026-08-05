@@ -90,9 +90,6 @@ jobs:
               url = f"http://127.0.0.1:{server.server_address[1]}/model"
               with tempfile.TemporaryDirectory() as root:
                   root = Path(root)
-                  destination = root / "model.bin"
-                  prefix = 177777
-                  destination.write_bytes(payload[:prefix])
                   model = {
                       "folder": "test",
                       "name": "model.bin",
@@ -100,6 +97,10 @@ jobs:
                       "size": len(payload),
                       "sha256": hashlib.sha256(payload).hexdigest().upper(),
                   }
+                  destination = root / "models" / model["folder"] / model["name"]
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  prefix = 177777
+                  destination.write_bytes(payload[:prefix])
                   models = (model,)
                   original_sources = module.model_sources
                   module.model_sources = lambda path, order: (url, url)
