@@ -7,7 +7,7 @@
       "label": "Compatibility - RTX 3060/4060 and 8-16 GB VRAM",
       "summary": "Lowest-memory official profile. Recommended for RTX 3060 through 4070-class cards and systems with 16-32 GB installed RAM.",
       "min_vram_mib": 7600,
-      "min_ram_gib": 14.5,
+      "min_ram_gib": 16,
       "required_free_gib": 60,
       "megapixels": 0.2,
       "resolution": "608x352",
