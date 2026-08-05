@@ -1,0 +1,96 @@
+name: Patch PowerShell output pollution
+
+on:
+  push:
+    branches:
+      - fix/powershell-output-pollution
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/powershell-output-pollution
+
+      - name: Patch installer helper output contracts
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          path = Path('Install-MiniMaxH3.ps1')
+          text = path.read_text(encoding='utf-8-sig')
+
+          replacements = [
+              (
+                  '            $response.EnsureSuccessStatusCode()\n',
+                  '            [void]$response.EnsureSuccessStatusCode()\n',
+              ),
+              (
+                  '                $response.EnsureSuccessStatusCode()\n',
+                  '                [void]$response.EnsureSuccessStatusCode()\n',
+              ),
+              (
+                  '''    if ($process.ExitCode -ne 0 -and -not $AllowFailure) {
+                  throw "Command failed with exit code $($process.ExitCode): $FilePath"
+              }
+              return $process.ExitCode
+          }''',
+                  '''    if ($process.ExitCode -ne 0 -and -not $AllowFailure) {
+                  throw "Command failed with exit code $($process.ExitCode): $FilePath"
+              }
+              if ($AllowFailure) {
+                  return [int]$process.ExitCode
+              }
+          }''',
+              ),
+              (
+                  '''    Invoke-SimpleDownload "Python 3.10.11" @(
+                  "https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe",
+                  "https://registry.npmmirror.com/-/binary/python/3.10.11/python-3.10.11-amd64.exe"
+              ) $installer''',
+                  '''    $null = Invoke-SimpleDownload "Python 3.10.11" @(
+                  "https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe",
+                  "https://registry.npmmirror.com/-/binary/python/3.10.11/python-3.10.11-amd64.exe"
+              ) $installer''',
+              ),
+              (
+                  '    Invoke-ProcessChecked $installer $arguments $InstallRoot\n',
+                  '    $null = Invoke-ProcessChecked $installer $arguments $InstallRoot\n',
+              ),
+          ]
+
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f'Expected installer fragment was not found:\n{old}')
+              text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding='utf-8')
+          '@ | python -
+
+      - name: Parse patched installer
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'Install-MiniMaxH3.ps1'), [ref]$tokens, [ref]$errors)
+          if ($errors.Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
+
+      - name: Commit patch
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Install-MiniMaxH3.ps1
+          if (git diff --cached --quiet) { exit 0 }
+          git commit -m "Prevent PowerShell helper output from corrupting return values"
+          git push origin HEAD:fix/powershell-output-pollution
