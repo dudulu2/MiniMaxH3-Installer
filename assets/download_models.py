@@ -7,6 +7,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import requests
 
@@ -15,64 +16,97 @@ OFFICIAL = "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main"
 MIRROR = "https://hf-mirror.com/Comfy-Org/MiniMax-H3/resolve/main"
 CHUNK_RANGE = 32 * 1024 * 1024
 STREAM_CHUNK = 1024 * 1024
-
-MODELS = (
-    {
-        "folder": "diffusion_models",
-        "name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
-        "size": 20_970_379_616,
-        "sha256": "E889202C41DAFB67B10D67B97F0D8541508036A6090AF23425A5C2615D03C47A",
-    },
-    {
-        "folder": "text_encoders",
-        "name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
-        "size": 15_687_142_551,
-        "sha256": "35A88D51044231FE332301D7A62AA81E3F2CBA62FEBEB446E2C1E3E0EF76F2C6",
-    },
-    {
-        "folder": "vae",
-        "name": "minimax_h3_video_vae_fp16.safetensors",
-        "size": 5_207_808_496,
-        "sha256": "7C1F131492E7EDDACAAC9069A61B81BDD39DE5CC96561E677C5EAB1CDCE5E522",
-    },
-    {
-        "folder": "vae",
-        "name": "minimax_h3_audio_vae_fp32.safetensors",
-        "size": 605_254_808,
-        "sha256": "8E505D95DD1561D47ABD43D4238FD40D9BB1AE9E147ED0A4CBA778D76AE4DB48",
-    },
-)
+MODEL_KEYS = ("diffusion_model", "text_encoder", "video_vae", "audio_vae")
 
 
-def write_status(path: Path, payload: dict) -> None:
+def load_json(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8-sig"))
+
+
+def resolve_profile(profiles_path: Path, profile_id: str) -> dict[str, Any]:
+    payload = load_json(profiles_path)
+    profiles = payload.get("profiles", [])
+    for profile in profiles:
+        if profile.get("id") == profile_id:
+            return profile
+    valid = ", ".join(item.get("id", "?") for item in profiles)
+    raise ValueError(f"unknown profile {profile_id!r}; valid profiles: {valid}")
+
+
+def resolve_models(catalog_path: Path, profile: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    catalog = load_json(catalog_path)
+    by_path = {item["path"]: item for item in catalog}
+    models: list[dict[str, Any]] = []
+    for key in MODEL_KEYS:
+        relative = profile[key]
+        item = by_path.get(relative)
+        if not item:
+            raise ValueError(f"profile references a model absent from catalog: {relative}")
+        folder, name = relative.split("/", 1)
+        size = item.get("size")
+        sha256 = item.get("sha256")
+        if not isinstance(size, int) or size <= 0:
+            raise ValueError(f"catalog has invalid size for {relative}")
+        if not isinstance(sha256, str) or len(sha256) != 64:
+            raise ValueError(f"catalog has invalid SHA-256 for {relative}")
+        models.append(
+            {
+                "folder": folder,
+                "name": name,
+                "path": relative,
+                "size": size,
+                "sha256": sha256.upper(),
+            }
+        )
+    return tuple(models)
+
+
+def write_status(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(payload), encoding="utf-8")
     os.replace(temporary, path)
 
 
-def completed_before(index: int) -> int:
-    return sum(model["size"] for model in MODELS[:index])
+def completed_before(models: tuple[dict[str, Any], ...], index: int) -> int:
+    return sum(model["size"] for model in models[:index])
 
 
-def report(status_path: Path, index: int, model: dict, file_bytes: int, phase: str) -> None:
+def report(
+    status_path: Path,
+    models: tuple[dict[str, Any], ...],
+    profile_id: str,
+    index: int,
+    model: dict[str, Any],
+    file_bytes: int,
+    phase: str,
+) -> None:
+    total_bytes = sum(item["size"] for item in models)
     write_status(
         status_path,
         {
+            "profile": profile_id,
             "index": index + 1,
-            "count": len(MODELS),
+            "count": len(models),
             "name": model["name"],
             "phase": phase,
             "file_bytes": file_bytes,
             "file_size": model["size"],
-            "completed_bytes": completed_before(index)
+            "completed_bytes": completed_before(models, index)
             + (model["size"] if phase == "verify" else min(file_bytes, model["size"])),
-            "total_bytes": sum(item["size"] for item in MODELS),
+            "total_bytes": total_bytes,
         },
     )
 
 
-def hash_file(path: Path, status_path: Path, index: int, model: dict) -> str:
+def hash_file(
+    path: Path,
+    status_path: Path,
+    models: tuple[dict[str, Any], ...],
+    profile_id: str,
+    index: int,
+    model: dict[str, Any],
+) -> str:
     digest = hashlib.sha256()
     done = 0
     with path.open("rb") as handle:
@@ -82,7 +116,7 @@ def hash_file(path: Path, status_path: Path, index: int, model: dict) -> str:
                 break
             digest.update(data)
             done += len(data)
-            report(status_path, index, model, done, "verify")
+            report(status_path, models, profile_id, index, model, done, "verify")
     return digest.hexdigest().upper()
 
 
@@ -90,7 +124,7 @@ def fetch_range(session: requests.Session, url: str, destination: Path, start: i
     headers = {
         "Range": f"bytes={start}-{end}",
         "Accept-Encoding": "identity",
-        "User-Agent": "MiniMaxH3-Windows-Installer/1.0",
+        "User-Agent": "MiniMaxH3-Windows-Installer/1.1",
     }
     with session.get(url, headers=headers, stream=True, timeout=(25, 180), allow_redirects=True) as response:
         if start > 0 and response.status_code != 206:
@@ -104,7 +138,14 @@ def fetch_range(session: requests.Session, url: str, destination: Path, start: i
     return destination.stat().st_size
 
 
-def download_model(comfy_root: Path, status_path: Path, index: int, model: dict) -> None:
+def download_model(
+    comfy_root: Path,
+    status_path: Path,
+    models: tuple[dict[str, Any], ...],
+    profile_id: str,
+    index: int,
+    model: dict[str, Any],
+) -> None:
     destination = comfy_root / "models" / model["folder"] / model["name"]
     destination.parent.mkdir(parents=True, exist_ok=True)
     expected_size = model["size"]
@@ -115,14 +156,13 @@ def download_model(comfy_root: Path, status_path: Path, index: int, model: dict)
 
     if destination.exists() and destination.stat().st_size == expected_size:
         print(f"Verifying existing model: {model['name']}", flush=True)
-        if hash_file(destination, status_path, index, model) == model["sha256"]:
+        if hash_file(destination, status_path, models, profile_id, index, model) == model["sha256"]:
             print(f"Verified: {model['name']}", flush=True)
             return
         print(f"Checksum mismatch; downloading again: {model['name']}", flush=True)
         destination.unlink()
 
-    relative = f"{model['folder']}/{model['name']}"
-    sources = (f"{OFFICIAL}/{relative}", f"{MIRROR}/{relative}")
+    sources = (f"{OFFICIAL}/{model['path']}", f"{MIRROR}/{model['path']}")
     errors: list[str] = []
     session = requests.Session()
     try:
@@ -136,9 +176,9 @@ def download_model(comfy_root: Path, status_path: Path, index: int, model: dict)
                     current = fetch_range(session, source, destination, start, end)
                     if current > expected_size:
                         raise RuntimeError("downloaded file is larger than expected")
-                    report(status_path, index, model, current, "download")
+                    report(status_path, models, profile_id, index, model, current, "download")
                 break
-            except Exception as exc:  # Network failures are retried on the alternate source.
+            except Exception as exc:
                 message = f"{source}: {exc}"
                 errors.append(message)
                 print(f"Source failed; partial file kept for resume: {message}", flush=True)
@@ -152,7 +192,7 @@ def download_model(comfy_root: Path, status_path: Path, index: int, model: dict)
     if actual_size != expected_size:
         raise RuntimeError(f"size mismatch for {model['name']}: {actual_size} != {expected_size}")
     print(f"Verifying SHA-256: {model['name']}", flush=True)
-    actual_hash = hash_file(destination, status_path, index, model)
+    actual_hash = hash_file(destination, status_path, models, profile_id, index, model)
     if actual_hash != model["sha256"]:
         raise RuntimeError(
             f"SHA-256 mismatch for {model['name']}: {actual_hash} != {model['sha256']}"
@@ -164,9 +204,24 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--comfy-root", type=Path, required=True)
     parser.add_argument("--status", type=Path, required=True)
+    parser.add_argument("--catalog", type=Path, required=True)
+    parser.add_argument("--profiles", type=Path, required=True)
+    parser.add_argument("--profile", required=True)
+    parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    for index, model in enumerate(MODELS):
-        download_model(args.comfy_root, args.status, index, model)
+
+    profile = resolve_profile(args.profiles, args.profile)
+    models = resolve_models(args.catalog, profile)
+    total = sum(item["size"] for item in models)
+    print(f"Selected profile: {profile['id']} ({profile['label']})", flush=True)
+    print(f"Selected model download: {total / (1024 ** 3):.2f} GiB", flush=True)
+    for item in models:
+        print(f"  {item['path']} | {item['size']} | {item['sha256']}", flush=True)
+    if args.dry_run:
+        return 0
+
+    for index, model in enumerate(models):
+        download_model(args.comfy_root, args.status, models, profile["id"], index, model)
     print("All MiniMax H3 models are ready.", flush=True)
     return 0
 

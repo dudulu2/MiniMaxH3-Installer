@@ -1,0 +1,132 @@
+name: Validate installer
+
+on:
+  push:
+    branches:
+      - main
+      - feat/hardware-profiles
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse PowerShell sources
+        shell: powershell
+        run: |
+          $paths = @(
+            'Install-MiniMaxH3.ps1',
+            'assets/hardware_profiles_core.ps1',
+            'assets/hardware_profiles_install.ps1'
+          )
+          foreach ($path in $paths) {
+            $tokens = $null
+            $errors = $null
+            [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Error
+              exit 1
+            }
+          }
+
+      - name: Validate hardware recommendation matrix
+        shell: powershell
+        run: |
+          $script:AssetsRoot = (Resolve-Path 'assets').Path
+          function Get-TotalRamBytes { return [int64](32GB) }
+          function Get-NvidiaSmiPath { return $null }
+          function Format-GiB { param([int64]$Bytes); return "{0:N1} GiB" -f ($Bytes / 1GB) }
+          function Get-DriveFreeBytes { param([string]$Path); return [int64](200GB) }
+          . (Join-Path $script:AssetsRoot 'hardware_profiles_core.ps1')
+          $cases = @(
+            @('NVIDIA GeForce RTX 3060', 12288, [int64](32GB), 'compatibility', 'cuda126'),
+            @('NVIDIA GeForce RTX 3090', 24576, [int64](32GB), 'compatibility', 'cuda126'),
+            @('NVIDIA GeForce RTX 4090', 24576, [int64](32GB), 'balanced_4090_32gb', 'cuda126'),
+            @('NVIDIA GeForce RTX 5090', 32768, [int64](32GB), 'balanced_4090_32gb', 'cuda128'),
+            @('NVIDIA GeForce RTX 4090', 24576, [int64](64GB), 'quality_64gb', 'cuda126')
+          )
+          foreach ($case in $cases) {
+            $profile = Get-RecommendProfileId -GpuName $case[0] -VramMiB $case[1] -RamBytes $case[2]
+            $runtime = Get-RuntimeIdForGpu -GpuName $case[0]
+            if ($profile -ne $case[3]) { throw "Profile recommendation mismatch for $($case[0]): $profile" }
+            if ($runtime -ne $case[4]) { throw "Runtime recommendation mismatch for $($case[0]): $runtime" }
+          }
+
+      - name: Validate profile catalog and downloader dry-runs
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check requests
+          python -m py_compile assets/download_models.py
+          $config = Get-Content assets/install_profiles.json -Raw | ConvertFrom-Json
+          foreach ($profile in $config.profiles) {
+            $temp = Join-Path $env:RUNNER_TEMP $profile.id
+            New-Item -ItemType Directory -Force -Path $temp | Out-Null
+            python assets/download_models.py `
+              --comfy-root $temp `
+              --status (Join-Path $temp 'status.json') `
+              --catalog assets/hf_model_inventory.json `
+              --profiles assets/install_profiles.json `
+              --profile $profile.id `
+              --dry-run
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: Verify selected PyTorch Windows wheels exist
+        shell: pwsh
+        run: |
+          @'
+          import html
+          import json
+          import urllib.parse
+          import urllib.request
+
+          config = json.load(open('assets/install_profiles.json', encoding='utf-8'))
+          package_names = ('torch', 'torchvision', 'torchaudio')
+          for runtime_id, runtime in config['runtimes'].items():
+              index = runtime['index_url'].rstrip('/')
+              for package in package_names:
+                  version = runtime[package]
+                  page_url = f"{index}/{package}/"
+                  text = urllib.request.urlopen(page_url, timeout=60).read().decode('utf-8', 'replace')
+                  text = urllib.parse.unquote(html.unescape(text))
+                  expected = f"{package}-{version}-cp310-cp310-win_amd64.whl"
+                  if expected not in text:
+                      raise SystemExit(f"Missing Windows Python 3.10 wheel: {expected} at {page_url}")
+                  print(f"Verified {runtime_id}: {expected}")
+          '@ | python -
+
+      - name: Generate and inspect all profile workflows
+        shell: powershell
+        run: |
+          $script:AssetsRoot = (Resolve-Path 'assets').Path
+          . (Join-Path $script:AssetsRoot 'hardware_profiles_core.ps1')
+          . (Join-Path $script:AssetsRoot 'hardware_profiles_install.ps1')
+          foreach ($profile in $script:Profiles) {
+            $root = Join-Path $env:RUNNER_TEMP ("workflow-" + $profile.id)
+            New-Item -ItemType Directory -Force -Path $root | Out-Null
+            $name = New-ProfileWorkflow $root $profile
+            $path = Join-Path $root ("user\default\workflows\" + $name)
+            $workflow = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+            $resolution = $workflow.nodes | Where-Object { $_.id -eq 115 }
+            $main = $workflow.nodes | Where-Object { $_.id -eq 105 }
+            $expectedDiffusion = Split-Path -Leaf $profile.diffusion_model
+            $expectedText = Split-Path -Leaf $profile.text_encoder
+            if ([double]$resolution.widgets_values[1] -ne [double]$profile.megapixels) { throw "Megapixel mismatch for $($profile.id)" }
+            if ($main.widgets_values[5] -ne $expectedDiffusion) { throw "Diffusion mismatch for $($profile.id)" }
+            if ($main.widgets_values[6] -ne $expectedText) { throw "Text encoder mismatch for $($profile.id)" }
+            $unet = $workflow.definitions.subgraphs[0].nodes | Where-Object { $_.type -eq 'UNETLoader' }
+            $clip = $workflow.definitions.subgraphs[0].nodes | Where-Object { $_.type -eq 'CLIPLoader' }
+            if ($unet.properties.models[0].name -ne $expectedDiffusion) { throw "UNET metadata mismatch for $($profile.id)" }
+            if ($clip.properties.models[0].name -ne $expectedText) { throw "CLIP metadata mismatch for $($profile.id)" }
+          }
+
+      - name: Run installer self-test
+        shell: powershell
+        run: |
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -STA -File .\Install-MiniMaxH3.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
