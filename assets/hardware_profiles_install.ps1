@@ -1,3 +1,45 @@
+function Install-PythonRuntime {
+    param([string]$InstallRoot)
+    $pythonRoot = Join-Path $InstallRoot "runtime\python"
+    $python = Join-Path $pythonRoot "python.exe"
+    if (Test-Path -LiteralPath $python) {
+        $version = (& $python -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null)
+        if ($version -eq "3.10") {
+            Add-Log "Existing private Python 3.10 runtime found."
+            return $python
+        }
+        throw "The private Python runtime exists but is not Python 3.10: $python"
+    }
+
+    $cache = Join-Path $InstallRoot "downloads"
+    $installer = Join-Path $cache "python-3.10.11-amd64.exe"
+    Set-Stage "Downloading Python 3.10 runtime" -1
+    $mirrorFirst = Test-ChinaMirrorPriority
+    $pythonUrls = if ($mirrorFirst) {
+        @(
+            "https://registry.npmmirror.com/-/binary/python/3.10.11/python-3.10.11-amd64.exe",
+            "https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe"
+        )
+    } else {
+        @(
+            "https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe",
+            "https://registry.npmmirror.com/-/binary/python/3.10.11/python-3.10.11-amd64.exe"
+        )
+    }
+    Add-Log ("Python download route: {0}" -f $(if ($mirrorFirst) { "China mirror first" } else { "Official source first" }))
+    $null = Invoke-SimpleDownload "Python 3.10.11" $pythonUrls $installer
+    $signature = Get-AuthenticodeSignature -LiteralPath $installer
+    if ($signature.Status -ne [Management.Automation.SignatureStatus]::Valid -or -not $signature.SignerCertificate.Subject.Contains("Python Software Foundation")) {
+        throw "The Python installer signature is not valid. File was not executed. Status: $($signature.Status)"
+    }
+    Add-Log "Python installer signature verified: $($signature.SignerCertificate.Subject)"
+    Set-Stage "Installing private Python runtime" -1
+    $arguments = "/quiet InstallAllUsers=0 Include_launcher=0 Include_test=0 Include_doc=0 AssociateFiles=0 Shortcuts=0 PrependPath=0 Include_pip=1 TargetDir=`"$pythonRoot`""
+    $null = Invoke-ProcessChecked $installer $arguments $InstallRoot
+    if (-not (Test-Path -LiteralPath $python)) { throw "Python installation did not create $python" }
+    return $python
+}
+
 function Invoke-PipWithFallback {
     param(
         [string]$Python,
@@ -8,16 +50,38 @@ function Invoke-PipWithFallback {
     if ($NeedsTorchIndex) {
         $officialArgs = "$PackageArguments --index-url $($Runtime.index_url)"
         $mirrorArgs = if ($Runtime.mirror_index_url) { "$PackageArguments --index-url $($Runtime.mirror_index_url)" } else { $null }
+        $officialLabel = "PyTorch official source"
+        $mirrorLabel = "Aliyun PyTorch mirror"
     } else {
+        $mirrorTorchIndex = if ($Runtime.mirror_index_url) { $Runtime.mirror_index_url } else { $Runtime.index_url }
         $officialArgs = "$PackageArguments --index-url https://pypi.org/simple --extra-index-url $($Runtime.index_url)"
-        $mirrorArgs = "$PackageArguments --index-url https://pypi.tuna.tsinghua.edu.cn/simple --extra-index-url $($Runtime.index_url)"
+        $mirrorArgs = "$PackageArguments --index-url https://pypi.tuna.tsinghua.edu.cn/simple --extra-index-url $mirrorTorchIndex"
+        $officialLabel = "official PyPI"
+        $mirrorLabel = "Tsinghua PyPI mirror"
     }
 
-    $exit = Invoke-ProcessChecked $Python ("-m pip {0} --timeout 30 --retries 2 --no-cache-dir --disable-pip-version-check" -f $officialArgs) $script:InstallerRoot -AllowFailure
+    $preferMirror = Test-ChinaMirrorPriority
+    if ($preferMirror -and $mirrorArgs) {
+        $primaryArgs = $mirrorArgs
+        $primaryLabel = $mirrorLabel
+        $fallbackArgs = $officialArgs
+        $fallbackLabel = $officialLabel
+    } else {
+        $primaryArgs = $officialArgs
+        $primaryLabel = $officialLabel
+        $fallbackArgs = $mirrorArgs
+        $fallbackLabel = $mirrorLabel
+    }
+
+    if ($preferMirror -and -not $mirrorArgs) {
+        Add-Log "No verified China mirror is configured for $($Runtime.label); using the official PyTorch source." "WARN"
+    }
+    Add-Log "Python package source: $primaryLabel"
+    $exit = Invoke-ProcessChecked $Python ("-m pip {0} --timeout 30 --retries 2 --no-cache-dir --disable-pip-version-check" -f $primaryArgs) $script:InstallerRoot -AllowFailure
     if ($exit -ne 0) {
-        if (-not $mirrorArgs) { throw "Official Python package source failed and no verified mirror is configured for $($Runtime.label)." }
-        Add-Log "Official Python package source failed; switching to mirrors." "WARN"
-        Invoke-ProcessChecked $Python ("-m pip {0} --timeout 30 --retries 3 --no-cache-dir --disable-pip-version-check" -f $mirrorArgs) $script:InstallerRoot
+        if (-not $fallbackArgs) { throw "$primaryLabel failed and no fallback source is configured for $($Runtime.label)." }
+        Add-Log "$primaryLabel failed; switching to $fallbackLabel." "WARN"
+        Invoke-ProcessChecked $Python ("-m pip {0} --timeout 30 --retries 3 --no-cache-dir --disable-pip-version-check" -f $fallbackArgs) $script:InstallerRoot
     }
 }
 
@@ -74,9 +138,11 @@ function Install-H3Models {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $statusPath) | Out-Null
     Remove-Item -LiteralPath $statusPath -Force -ErrorAction SilentlyContinue
 
+    $sourceOrder = if (Test-ChinaMirrorPriority) { "mirror-first" } else { "official-first" }
+    Add-Log "Model download route: $sourceOrder"
     $psi = New-Object Diagnostics.ProcessStartInfo
     $psi.FileName = $Python
-    $psi.Arguments = "`"$downloader`" --comfy-root `"$ComfyRoot`" --status `"$statusPath`" --catalog `"$script:CatalogPath`" --profiles `"$script:ProfilesPath`" --profile `"$($Profile.id)`""
+    $psi.Arguments = "`"$downloader`" --comfy-root `"$ComfyRoot`" --status `"$statusPath`" --catalog `"$script:CatalogPath`" --profiles `"$script:ProfilesPath`" --profile `"$($Profile.id)`" --source-order $sourceOrder"
     $psi.WorkingDirectory = $InstallRoot
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
@@ -317,6 +383,7 @@ if (Test-Path -LiteralPath `$pidFile) {
         default_resolution = $Profile.resolution
         default_duration_seconds = $Profile.duration_seconds
         launch_file = "Start MiniMax H3.bat"
+        download_route = $(if (Test-ChinaMirrorPriority) { "china-mirror-first" } else { "official-first" })
     }
     $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $InstallRoot ".minimax-h3-install.json") -Encoding UTF8
 }
@@ -345,6 +412,7 @@ function Invoke-Install {
     $btnBrowse.Enabled = $false
     $btnCheck.Enabled = $false
     if ($script:ProfileButton) { $script:ProfileButton.Enabled = $false }
+    if ($script:chkChinaMirror) { $script:chkChinaMirror.Enabled = $false }
     $btnLaunch.Enabled = $false
     $form.ControlBox = $false
     $txtLog.Clear()
@@ -357,6 +425,7 @@ function Invoke-Install {
         Add-Log "Selected GPU: $($report.GpuName) (physical index $($report.GpuIndex))"
         Add-Log "Selected profile: $($profile.label)"
         Add-Log "Selected runtime: $($runtime.label)"
+        Add-Log "Download route: $(Get-DownloadRouteLabel)"
         Add-Log ("Models: {0:N2} GiB; downloads support resume and SHA-256 verification." -f ($modelBytes/1GB))
         Add-Log "No SeedVR2, xformers, SageAttention, FlashAttention, Triton, or custom compute nodes will be installed."
 
@@ -383,6 +452,7 @@ function Invoke-Install {
         $btnBrowse.Enabled = $true
         $btnCheck.Enabled = $true
         if ($script:ProfileButton) { $script:ProfileButton.Enabled = $true }
+        if ($script:chkChinaMirror) { $script:chkChinaMirror.Enabled = $true }
         $form.ControlBox = $true
     }
 }

@@ -13,6 +13,20 @@ $script:SelectedProfileId = "auto"
 $script:ProfileConfirmed = $false
 $script:LastHardwareReport = $null
 $script:ProfileButton = $null
+$script:chkChinaMirror = $null
+
+function Test-ChinaMirrorPriority {
+    try {
+        return [bool]($script:chkChinaMirror -and $script:chkChinaMirror.Checked)
+    } catch {
+        return $false
+    }
+}
+
+function Get-DownloadRouteLabel {
+    if (Test-ChinaMirrorPriority) { return "China mirrors first" }
+    return "Official sources first"
+}
 
 function Get-ProfileById {
     param([string]$Id)
@@ -273,6 +287,20 @@ function Show-HardwareProfileDialog {
 }
 
 function Initialize-HardwareProfileUI {
+    if (-not $script:chkChinaMirror) {
+        $script:chkChinaMirror = New-Object Windows.Forms.CheckBox
+        $script:chkChinaMirror.Text = "China mainland mirror priority"
+        $script:chkChinaMirror.AutoSize = $true
+        $script:chkChinaMirror.Location = New-Object Drawing.Point(250, 420)
+        $chinaLocale = $false
+        try {
+            $chinaLocale = ([Globalization.RegionInfo]::CurrentRegion.TwoLetterISORegionName -eq "CN") -or ([Globalization.CultureInfo]::CurrentUICulture.Name -eq "zh-CN")
+        } catch { $chinaLocale = $false }
+        $script:chkChinaMirror.Checked = $chinaLocale
+        $script:chkChinaMirror.Add_CheckedChanged({ Show-HardwareReport | Out-Null })
+        $form.Controls.Add($script:chkChinaMirror)
+        $script:chkChinaMirror.BringToFront()
+    }
     if (-not $script:ProfileButton) {
         $script:ProfileButton = New-Object Windows.Forms.Button
         $script:ProfileButton.Text = "Change configuration"
@@ -331,6 +359,8 @@ function Get-HardwareReport {
     $selectionText = if ($script:SelectedProfileId -eq "auto") { "Automatically recommended." } else { "Manually selected." }
     & $add "Install profile" $profile.label "PASS" ("{0} Default {1}, {2} seconds." -f $selectionText, $profile.resolution, $profile.duration_seconds)
     & $add "PyTorch runtime" $runtime.label "PASS" ($(if ($snapshot.RuntimeId -eq "cuda128") { "RTX 50-series / Blackwell runtime selected." } else { "RTX 30/40-series runtime selected." }))
+    $routeDetail = if (Test-ChinaMirrorPriority) { "npmmirror, Tsinghua, Aliyun (when available), and hf-mirror are attempted before official sources." } else { "Official sources are attempted first; configured mirrors remain automatic fallbacks." }
+    & $add "Download route" (Get-DownloadRouteLabel) "PASS" $routeDetail
 
     try {
         $free = Get-DriveFreeBytes $InstallPath
@@ -371,6 +401,7 @@ function Get-HardwareReport {
         ProfileId = $profileId
         RuntimeId = $snapshot.RuntimeId
         RecommendedProfileId = $snapshot.RecommendedProfileId
+        ChinaMirrorPriority = (Test-ChinaMirrorPriority)
     }
 }
 

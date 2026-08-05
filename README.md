@@ -45,9 +45,13 @@ The current installer deploys the standard FL2VA workflow for text generation an
 
 The launcher does not use `--lowvram`; ComfyUI uses the PyTorch 2.8 DynamicVRAM path. SeedVR2, xformers, SageAttention, FlashAttention, and Triton are not installed.
 
-## Download safety
+## Download routes and safety
 
-All official model file sizes and SHA-256 values are stored in `assets/hf_model_inventory.json`. Downloads try Hugging Face first and then `hf-mirror`, retain partial files, resume by HTTP range, and verify the completed file before installation continues.
+The main installer window includes **China mainland mirror priority**. When enabled, Python uses npmmirror first, normal Python packages use the Tsinghua PyPI mirror first, CUDA 12.6 PyTorch uses the Aliyun mirror first, and MiniMax H3 models use `hf-mirror` first. Every configured official source remains the automatic fallback. CUDA 12.8 currently has no verified bundled China mirror and therefore continues to use the official PyTorch source.
+
+When the option is disabled, official sources are attempted first and mirrors remain automatic fallbacks. The selected route is locked while an installation is running and is written to the installation manifest.
+
+All official model file sizes and SHA-256 values are stored in `assets/hf_model_inventory.json`. Model downloads retain partial files, resume by HTTP range, and verify the completed file before installation continues, regardless of source order.
 
 ## Use
 

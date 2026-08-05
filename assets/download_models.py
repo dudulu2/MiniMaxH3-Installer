@@ -19,6 +19,14 @@ STREAM_CHUNK = 1024 * 1024
 MODEL_KEYS = ("diffusion_model", "text_encoder", "video_vae", "audio_vae")
 
 
+def model_sources(model_path: str, source_order: str) -> tuple[str, str]:
+    official = f"{OFFICIAL}/{model_path}"
+    mirror = f"{MIRROR}/{model_path}"
+    if source_order == "mirror-first":
+        return mirror, official
+    return official, mirror
+
+
 def load_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
@@ -145,6 +153,7 @@ def download_model(
     profile_id: str,
     index: int,
     model: dict[str, Any],
+    source_order: str,
 ) -> None:
     destination = comfy_root / "models" / model["folder"] / model["name"]
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -162,7 +171,7 @@ def download_model(
         print(f"Checksum mismatch; downloading again: {model['name']}", flush=True)
         destination.unlink()
 
-    sources = (f"{OFFICIAL}/{model['path']}", f"{MIRROR}/{model['path']}")
+    sources = model_sources(model["path"], source_order)
     errors: list[str] = []
     session = requests.Session()
     try:
@@ -207,6 +216,11 @@ def main() -> int:
     parser.add_argument("--catalog", type=Path, required=True)
     parser.add_argument("--profiles", type=Path, required=True)
     parser.add_argument("--profile", required=True)
+    parser.add_argument(
+        "--source-order",
+        choices=("official-first", "mirror-first"),
+        default="official-first",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -215,13 +229,22 @@ def main() -> int:
     total = sum(item["size"] for item in models)
     print(f"Selected profile: {profile['id']} ({profile['label']})", flush=True)
     print(f"Selected model download: {total / (1024 ** 3):.2f} GiB", flush=True)
+    print(f"Model source order: {args.source_order}", flush=True)
     for item in models:
         print(f"  {item['path']} | {item['size']} | {item['sha256']}", flush=True)
     if args.dry_run:
         return 0
 
     for index, model in enumerate(models):
-        download_model(args.comfy_root, args.status, models, profile["id"], index, model)
+        download_model(
+            args.comfy_root,
+            args.status,
+            models,
+            profile["id"],
+            index,
+            model,
+            args.source_order,
+        )
     print("All MiniMax H3 models are ready.", flush=True)
     return 0
 
