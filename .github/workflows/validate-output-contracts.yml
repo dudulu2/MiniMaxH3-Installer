@@ -88,6 +88,7 @@ jobs:
           }
           '@
           Add-Type -TypeDefinition $source -Language CSharp -OutputAssembly (Join-Path $pythonRoot 'python.exe') -OutputType ConsoleApplication
+          $script:FakePythonSource = Join-Path $pythonRoot 'python.exe'
           $existingResult = @(Install-PythonRuntime $existingRoot)
           if ($existingResult.Count -ne 1 -or $existingResult[0] -isnot [string]) {
             throw "Existing Install-PythonRuntime must return one string; got $($existingResult.Count) values."
@@ -114,7 +115,7 @@ jobs:
             param([string]$FilePath, [string]$Arguments, [string]$WorkingDirectory, [switch]$AllowFailure)
             $target = Join-Path $WorkingDirectory 'runtime\python'
             New-Item -ItemType Directory -Force -Path $target | Out-Null
-            Copy-Item -LiteralPath (Join-Path $pythonRoot 'python.exe') -Destination (Join-Path $target 'python.exe') -Force
+            Copy-Item -LiteralPath $script:FakePythonSource -Destination (Join-Path $target 'python.exe') -Force
             if ($AllowFailure) { return 0 }
           }
 
