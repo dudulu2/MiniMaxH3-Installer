@@ -1,0 +1,75 @@
+name: Apply hardware profile integration
+
+on:
+  push:
+    branches:
+      - feat/hardware-profiles
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/hardware-profiles
+
+      - name: Integrate profile modules into installer
+        shell: pwsh
+        run: |
+          $path = 'Install-MiniMaxH3.ps1'
+          $text = Get-Content -LiteralPath $path -Raw
+
+          $formMarker = '$form = New-Object Windows.Forms.Form'
+          $moduleBlock = @'
+          . (Join-Path $script:AssetsRoot "hardware_profiles_core.ps1")
+          . (Join-Path $script:AssetsRoot "hardware_profiles_install.ps1")
+
+          '@
+          if (-not $text.Contains('hardware_profiles_core.ps1')) {
+            if (-not $text.Contains($formMarker)) { throw 'Form marker not found.' }
+            $text = $text.Replace($formMarker, $moduleBlock + $formMarker)
+          }
+
+          $text = $text.Replace('MiniMax H3 Installer for 8 GB VRAM / 16 GB RAM', 'MiniMax H3 Hardware-Aware Installer')
+          $text = $text.Replace('Self-contained installer | H3 INT8 + Qwen NVFP4 | DynamicVRAM | No SeedVR2', 'RTX 3060-5090 | automatic model and CUDA runtime selection | isolated environment')
+
+          $shownMarker = '$form.Add_Shown({' + "`r`n" + '    Show-HardwareReport | Out-Null'
+          $shownReplacement = '$form.Add_Shown({' + "`r`n" + '    Initialize-HardwareProfileUI' + "`r`n" + '    Show-HardwareReport | Out-Null'
+          if (-not $text.Contains('Initialize-HardwareProfileUI')) {
+            if (-not $text.Contains($shownMarker)) {
+              $shownMarker = '$form.Add_Shown({' + "`n" + '    Show-HardwareReport | Out-Null'
+              $shownReplacement = '$form.Add_Shown({' + "`n" + '    Initialize-HardwareProfileUI' + "`n" + '    Show-HardwareReport | Out-Null'
+            }
+            if (-not $text.Contains($shownMarker)) { throw 'Shown handler marker not found.' }
+            $text = $text.Replace($shownMarker, $shownReplacement)
+          }
+
+          Set-Content -LiteralPath $path -Value $text -Encoding UTF8
+
+      - name: Parse PowerShell files
+        shell: powershell
+        run: |
+          foreach ($path in @('Install-MiniMaxH3.ps1','assets/hardware_profiles_core.ps1','assets/hardware_profiles_install.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Error
+              exit 1
+            }
+          }
+
+      - name: Commit integration
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Install-MiniMaxH3.ps1
+          if (git diff --cached --quiet) { exit 0 }
+          git commit -m "Integrate hardware-aware profile selection"
+          git push origin HEAD:feat/hardware-profiles
