@@ -1,0 +1,141 @@
+name: Validate parallel model downloads
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+  validate-parallel-downloader:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install test dependency
+        run: python -m pip install requests
+
+      - name: Validate Python syntax and mode selection
+        shell: powershell
+        run: |
+          python -m py_compile assets/download_models.py
+          @'
+          import importlib.util
+          import json
+          import tempfile
+          from pathlib import Path
+
+          spec = importlib.util.spec_from_file_location("download_models", "assets/download_models.py")
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+
+          assert module.choose_worker_plans("stable", 10**9, True) == [1]
+          assert module.choose_worker_plans("auto", 10**9, True) == [4, 2, 1]
+          assert module.choose_worker_plans("accelerated", 10**9, True) == [4, 2, 1]
+          assert module.choose_worker_plans("auto", 10**9, False) == [1]
+          assert module.build_ranges(5, 5) == []
+          assert module.build_ranges(0, 1) == [(0, 0)]
+
+          with tempfile.TemporaryDirectory() as root:
+              status = Path(root) / "status.json"
+              module.write_status(status, {"phase": "download", "speed_bps": 123})
+              assert json.loads(status.read_text(encoding="utf-8"))["speed_bps"] == 123
+          '@ | python -
+
+      - name: Validate resumable parallel ranges with local server
+        shell: powershell
+        run: |
+          @'
+          import hashlib
+          import http.server
+          import importlib.util
+          import socketserver
+          import tempfile
+          import threading
+          from pathlib import Path
+
+          spec = importlib.util.spec_from_file_location("download_models", "assets/download_models.py")
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          module.PART_SIZE = 256 * 1024
+          module.LOW_SPEED_GRACE_SECONDS = 5
+
+          payload = bytes((index % 251 for index in range(2 * 1024 * 1024 + 123)))
+
+          class RangeHandler(http.server.BaseHTTPRequestHandler):
+              def do_GET(self):
+                  header = self.headers.get("Range")
+                  if not header or not header.startswith("bytes="):
+                      self.send_response(416)
+                      self.end_headers()
+                      return
+                  start_text, end_text = header[6:].split("-", 1)
+                  start = int(start_text)
+                  end = min(int(end_text), len(payload) - 1)
+                  body = payload[start:end + 1]
+                  self.send_response(206)
+                  self.send_header("Content-Range", f"bytes {start}-{end}/{len(payload)}")
+                  self.send_header("Content-Length", str(len(body)))
+                  self.end_headers()
+                  self.wfile.write(body)
+
+              def log_message(self, format, *args):
+                  pass
+
+          with socketserver.ThreadingTCPServer(("127.0.0.1", 0), RangeHandler) as server:
+              thread = threading.Thread(target=server.serve_forever, daemon=True)
+              thread.start()
+              url = f"http://127.0.0.1:{server.server_address[1]}/model"
+              with tempfile.TemporaryDirectory() as root:
+                  root = Path(root)
+                  model = {
+                      "folder": "test",
+                      "name": "model.bin",
+                      "path": "test/model.bin",
+                      "size": len(payload),
+                      "sha256": hashlib.sha256(payload).hexdigest().upper(),
+                  }
+                  destination = root / "models" / model["folder"] / model["name"]
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  prefix = 177777
+                  destination.write_bytes(payload[:prefix])
+                  models = (model,)
+                  original_sources = module.model_sources
+                  module.model_sources = lambda path, order: (url, url)
+                  try:
+                      module.download_model(
+                          root,
+                          root / "status.json",
+                          models,
+                          "test",
+                          0,
+                          model,
+                          "mirror-first",
+                          "auto",
+                      )
+                  finally:
+                      module.model_sources = original_sources
+                  assert destination.read_bytes() == payload
+                  assert not module.part_directory(destination).exists()
+              server.shutdown()
+          '@ | python -
+
+      - name: Parse PowerShell and verify UI wiring
+        shell: powershell
+        run: |
+          foreach ($path in @('Install-MiniMaxH3.ps1', 'assets/hardware_profiles_core.ps1', 'assets/hardware_profiles_install.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Error
+              exit 1
+            }
+          }
+          $core = Get-Content assets/hardware_profiles_core.ps1 -Raw
+          $install = Get-Content assets/hardware_profiles_install.ps1 -Raw
+          if ($core -notmatch 'function Get-ModelDownloadMode') { throw 'Download mode UI is not wired.' }
+          if ($install -notmatch '--download-mode \$downloadMode') { throw 'Download mode is not passed to Python.' }
+          if ($install -notmatch 'speed_bps') { throw 'Live speed is not displayed.' }

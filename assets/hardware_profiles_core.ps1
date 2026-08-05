@@ -14,6 +14,29 @@ $script:ProfileConfirmed = $false
 $script:LastHardwareReport = $null
 $script:ProfileButton = $null
 $script:chkChinaMirror = $null
+$script:DownloadModeLabel = $null
+$script:DownloadModeCombo = $null
+
+function Get-ModelDownloadMode {
+    try {
+        if ($script:DownloadModeCombo -and $script:DownloadModeCombo.SelectedItem) {
+            $property = $script:DownloadModeCombo.SelectedItem.PSObject.Properties["Id"]
+            if ($property) {
+                $value = [string]$property.Value
+                if ($value -in @("auto", "stable", "accelerated")) { return $value }
+            }
+        }
+    } catch { }
+    return "auto"
+}
+
+function Get-ModelDownloadModeLabel {
+    switch (Get-ModelDownloadMode) {
+        "stable" { return "Stable - 1 connection" }
+        "accelerated" { return "Accelerated - up to 4 connections" }
+        default { return "Auto - up to 4 connections" }
+    }
+}
 
 function Test-ChinaMirrorPriority {
     try {
@@ -301,6 +324,29 @@ function Initialize-HardwareProfileUI {
         $form.Controls.Add($script:chkChinaMirror)
         $script:chkChinaMirror.BringToFront()
     }
+    if (-not $script:DownloadModeCombo) {
+        $script:DownloadModeLabel = New-Object Windows.Forms.Label
+        $script:DownloadModeLabel.Text = "Model download:"
+        $script:DownloadModeLabel.AutoSize = $true
+        $script:DownloadModeLabel.Location = New-Object Drawing.Point(500, 421)
+        $script:DownloadModeLabel.Anchor = "Top,Right"
+        $form.Controls.Add($script:DownloadModeLabel)
+
+        $script:DownloadModeCombo = New-Object Windows.Forms.ComboBox
+        $script:DownloadModeCombo.DropDownStyle = "DropDownList"
+        $script:DownloadModeCombo.DisplayMember = "Label"
+        $script:DownloadModeCombo.Location = New-Object Drawing.Point(615, 415)
+        $script:DownloadModeCombo.Size = New-Object Drawing.Size(285, 28)
+        $script:DownloadModeCombo.Anchor = "Top,Right"
+        [void]$script:DownloadModeCombo.Items.Add([PSCustomObject]@{ Id="auto"; Label="Auto (recommended, max 4 connections)" })
+        [void]$script:DownloadModeCombo.Items.Add([PSCustomObject]@{ Id="stable"; Label="Stable (1 connection)" })
+        [void]$script:DownloadModeCombo.Items.Add([PSCustomObject]@{ Id="accelerated"; Label="Accelerated (4 connections)" })
+        $script:DownloadModeCombo.SelectedIndex = 0
+        $script:DownloadModeCombo.Add_SelectedIndexChanged({ Show-HardwareReport | Out-Null })
+        $form.Controls.Add($script:DownloadModeCombo)
+        $script:DownloadModeLabel.BringToFront()
+        $script:DownloadModeCombo.BringToFront()
+    }
     if (-not $script:ProfileButton) {
         $script:ProfileButton = New-Object Windows.Forms.Button
         $script:ProfileButton.Text = "Change configuration"
@@ -361,6 +407,12 @@ function Get-HardwareReport {
     & $add "PyTorch runtime" $runtime.label "PASS" ($(if ($snapshot.RuntimeId -eq "cuda128") { "RTX 50-series / Blackwell runtime selected." } else { "RTX 30/40-series runtime selected." }))
     $routeDetail = if (Test-ChinaMirrorPriority) { "npmmirror, Tsinghua, Aliyun (when available), and hf-mirror are attempted before official sources." } else { "Official sources are attempted first; configured mirrors remain automatic fallbacks." }
     & $add "Download route" (Get-DownloadRouteLabel) "PASS" $routeDetail
+    $modeDetail = switch (Get-ModelDownloadMode) {
+        "stable" { "Uses one resumable connection for maximum compatibility." }
+        "accelerated" { "Uses four independent range parts and automatically falls back to two or one connection after repeated failures." }
+        default { "Automatically uses up to four independent range parts, switches slow sources, and falls back to safer connection counts." }
+    }
+    & $add "Model download" (Get-ModelDownloadModeLabel) "PASS" $modeDetail
 
     try {
         $free = Get-DriveFreeBytes $InstallPath
@@ -402,6 +454,7 @@ function Get-HardwareReport {
         RuntimeId = $snapshot.RuntimeId
         RecommendedProfileId = $snapshot.RecommendedProfileId
         ChinaMirrorPriority = (Test-ChinaMirrorPriority)
+        DownloadMode = (Get-ModelDownloadMode)
     }
 }
 

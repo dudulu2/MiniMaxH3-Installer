@@ -168,6 +168,25 @@ function Read-SharedJsonFile {
     return ($json | ConvertFrom-Json)
 }
 
+function Format-DownloadSpeed {
+    param([double]$BytesPerSecond)
+    if ($BytesPerSecond -ge 1MB) { return ("{0:N2} MB/s" -f ($BytesPerSecond / 1MB)) }
+    if ($BytesPerSecond -ge 1KB) { return ("{0:N0} KB/s" -f ($BytesPerSecond / 1KB)) }
+    return "0 KB/s"
+}
+
+function Format-DownloadEta {
+    param([int64]$Seconds)
+    if ($Seconds -lt 0) { return "ETA --" }
+    if ($Seconds -ge 3600) {
+        $hours = [Math]::Floor($Seconds / 3600)
+        $minutes = [Math]::Floor(($Seconds % 3600) / 60)
+        return ("ETA {0}h {1}m" -f $hours, $minutes)
+    }
+    if ($Seconds -ge 60) { return ("ETA {0}m" -f [Math]::Ceiling($Seconds / 60)) }
+    return ("ETA {0}s" -f $Seconds)
+}
+
 function Install-H3Models {
     param([string]$ComfyRoot, [string]$Python, [string]$InstallRoot, $Profile)
     $downloader = Join-Path $script:AssetsRoot "download_models.py"
@@ -179,10 +198,12 @@ function Install-H3Models {
         Remove-Item -Force -ErrorAction SilentlyContinue
 
     $sourceOrder = if (Test-ChinaMirrorPriority) { "mirror-first" } else { "official-first" }
+    $downloadMode = Get-ModelDownloadMode
     Add-Log "Model download route: $sourceOrder"
+    Add-Log "Model download mode: $downloadMode"
     $psi = New-Object Diagnostics.ProcessStartInfo
     $psi.FileName = $Python
-    $psi.Arguments = "`"$downloader`" --comfy-root `"$ComfyRoot`" --status `"$statusPath`" --catalog `"$script:CatalogPath`" --profiles `"$script:ProfilesPath`" --profile `"$($Profile.id)`" --source-order $sourceOrder"
+    $psi.Arguments = "`"$downloader`" --comfy-root `"$ComfyRoot`" --status `"$statusPath`" --catalog `"$script:CatalogPath`" --profiles `"$script:ProfilesPath`" --profile `"$($Profile.id)`" --source-order $sourceOrder --download-mode $downloadMode"
     $psi.WorkingDirectory = $InstallRoot
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
@@ -193,15 +214,29 @@ function Install-H3Models {
     if (-not $process.Start()) { throw "Could not start the model downloader." }
     $stdout = $process.StandardOutput.ReadToEndAsync()
     $stderr = $process.StandardError.ReadToEndAsync()
+    $lastRouteSummary = ""
     while (-not $process.WaitForExit(500)) {
         if (Test-Path -LiteralPath $statusPath) {
             try {
                 $state = Read-SharedJsonFile -Path $statusPath
                 $overall = if ($state.total_bytes -gt 0) { [int](100 * $state.completed_bytes / $state.total_bytes) } else { 0 }
-                $label = if ($state.phase -eq "verify") {
-                    "Verifying $($state.name)"
+                if ($state.phase -eq "verify") {
+                    $label = "Verifying $($state.name)"
+                } elseif ($state.phase -eq "merge") {
+                    $label = "Merging downloaded parts: $($state.name)"
                 } else {
-                    "Model $($state.index)/$($state.count): $($state.name) - $([Math]::Round($state.file_bytes/1GB, 2))/$([Math]::Round($state.file_size/1GB, 2)) GiB"
+                    $details = @()
+                    if ($state.PSObject.Properties["source"] -and $state.source) { $details += [string]$state.source }
+                    if ($state.PSObject.Properties["connections"] -and [int]$state.connections -gt 0) { $details += ("{0} conn" -f [int]$state.connections) }
+                    if ($state.PSObject.Properties["speed_bps"] -and [double]$state.speed_bps -gt 0) { $details += (Format-DownloadSpeed ([double]$state.speed_bps)) }
+                    if ($state.PSObject.Properties["eta_seconds"]) { $details += (Format-DownloadEta ([int64]$state.eta_seconds)) }
+                    $suffix = if ($details.Count -gt 0) { " | " + ($details -join " | ") } else { "" }
+                    $label = "Model $($state.index)/$($state.count): $($state.name) - $([Math]::Round($state.file_bytes/1GB, 2))/$([Math]::Round($state.file_size/1GB, 2)) GiB$suffix"
+                    $routeSummary = "{0}|{1}|{2}" -f $state.source, $state.connections, $state.download_mode
+                    if ($state.source -and $routeSummary -ne $lastRouteSummary) {
+                        Add-Log ("Active model source: {0}; connections: {1}; mode: {2}" -f $state.source, $state.connections, $state.download_mode) "MODEL"
+                        $lastRouteSummary = $routeSummary
+                    }
                 }
                 Set-Stage $label $overall
             } catch { Pump-UI }
@@ -424,6 +459,7 @@ if (Test-Path -LiteralPath `$pidFile) {
         default_duration_seconds = $Profile.duration_seconds
         launch_file = "Start MiniMax H3.bat"
         download_route = $(if (Test-ChinaMirrorPriority) { "china-mirror-first" } else { "official-first" })
+        model_download_mode = (Get-ModelDownloadMode)
     }
     $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $InstallRoot ".minimax-h3-install.json") -Encoding UTF8
 }
@@ -453,6 +489,7 @@ function Invoke-Install {
     $btnCheck.Enabled = $false
     if ($script:ProfileButton) { $script:ProfileButton.Enabled = $false }
     if ($script:chkChinaMirror) { $script:chkChinaMirror.Enabled = $false }
+    if ($script:DownloadModeCombo) { $script:DownloadModeCombo.Enabled = $false }
     $btnLaunch.Enabled = $false
     $form.ControlBox = $false
     $txtLog.Clear()
@@ -466,6 +503,7 @@ function Invoke-Install {
         Add-Log "Selected profile: $($profile.label)"
         Add-Log "Selected runtime: $($runtime.label)"
         Add-Log "Download route: $(Get-DownloadRouteLabel)"
+        Add-Log "Model download mode: $(Get-ModelDownloadModeLabel)"
         Add-Log ("Models: {0:N2} GiB; downloads support resume and SHA-256 verification." -f ($modelBytes/1GB))
         Add-Log "No SeedVR2, xformers, SageAttention, FlashAttention, Triton, or custom compute nodes will be installed."
 
@@ -494,6 +532,7 @@ function Invoke-Install {
         $btnCheck.Enabled = $true
         if ($script:ProfileButton) { $script:ProfileButton.Enabled = $true }
         if ($script:chkChinaMirror) { $script:chkChinaMirror.Enabled = $true }
+        if ($script:DownloadModeCombo) { $script:DownloadModeCombo.Enabled = $true }
         $form.ControlBox = $true
     }
 }
