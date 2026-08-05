@@ -726,8 +726,10 @@ function Invoke-Install {
     }
 }
 
+. (Join-Path $script:AssetsRoot "hardware_profiles_core.ps1")
+. (Join-Path $script:AssetsRoot "hardware_profiles_install.ps1")
 $form = New-Object Windows.Forms.Form
-$form.Text = "MiniMax H3 Installer for 8 GB VRAM / 16 GB RAM"
+$form.Text = "MiniMax H3 Hardware-Aware Installer"
 $form.StartPosition = "CenterScreen"
 $form.Size = New-Object Drawing.Size(980, 760)
 $form.MinimumSize = New-Object Drawing.Size(900, 680)
@@ -743,7 +745,7 @@ $title.Location = New-Object Drawing.Point(24, 18)
 $form.Controls.Add($title)
 
 $subtitle = New-Object Windows.Forms.Label
-$subtitle.Text = "Self-contained installer | H3 INT8 + Qwen NVFP4 | DynamicVRAM | No SeedVR2"
+$subtitle.Text = "RTX 3060-5090 | automatic model and CUDA runtime selection | isolated environment"
 $subtitle.ForeColor = [Drawing.Color]::FromArgb(85, 92, 104)
 $subtitle.AutoSize = $true
 $subtitle.Location = New-Object Drawing.Point(27, 58)
@@ -867,6 +869,7 @@ $btnCheck.Add_Click({ Show-HardwareReport | Out-Null })
 $btnInstall.Add_Click({ Invoke-Install })
 $btnLaunch.Add_Click({ if ($btnLaunch.Tag -and (Test-Path -LiteralPath $btnLaunch.Tag)) { Start-Process -FilePath $btnLaunch.Tag } })
 $form.Add_Shown({
+    Initialize-HardwareProfileUI
     Show-HardwareReport | Out-Null
     $launcher = Join-Path $txtPath.Text "Start MiniMax H3.bat"
     if (Test-Path -LiteralPath $launcher) {
@@ -892,4 +895,5 @@ if ($SelfTest) {
 }
 
 [void]$form.ShowDialog()
+
 
