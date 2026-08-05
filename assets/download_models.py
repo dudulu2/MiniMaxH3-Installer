@@ -70,10 +70,45 @@ def resolve_models(catalog_path: Path, profile: dict[str, Any]) -> tuple[dict[st
 
 
 def write_status(path: Path, payload: dict[str, Any]) -> None:
+    """Best-effort progress update that must never abort a model download.
+
+    Windows can briefly reject os.replace() while the installer UI is reading the
+    destination. Use a process-specific temporary file, retry transient sharing
+    violations, and treat the status file as non-critical after the retry budget.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload), encoding="utf-8")
-    os.replace(temporary, path)
+    encoded = json.dumps(payload)
+    temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+
+    for attempt in range(8):
+        try:
+            temporary.write_text(encoded, encoding="utf-8")
+            os.replace(temporary, path)
+            return
+        except PermissionError as exc:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+            if attempt == 7:
+                print(
+                    f"WARNING: progress file is busy; continuing without this update: {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return
+            time.sleep(0.05 * (attempt + 1))
+        except OSError as exc:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+            print(
+                f"WARNING: could not update progress file; continuing: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return
 
 
 def completed_before(models: tuple[dict[str, Any], ...], index: int) -> int:

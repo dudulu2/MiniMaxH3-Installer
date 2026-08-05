@@ -147,6 +147,27 @@ function Resolve-ComfyEnvironmentResult {
     return $matches[0]
 }
 
+function Read-SharedJsonFile {
+    param([string]$Path)
+
+    $share = [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
+    $stream = New-Object IO.FileStream(
+        $Path,
+        [IO.FileMode]::Open,
+        [IO.FileAccess]::Read,
+        $share
+    )
+    $reader = New-Object IO.StreamReader($stream, [Text.Encoding]::UTF8, $true)
+    try {
+        $json = $reader.ReadToEnd()
+    } finally {
+        $reader.Dispose()
+        $stream.Dispose()
+    }
+    if (-not $json.Trim()) { return $null }
+    return ($json | ConvertFrom-Json)
+}
+
 function Install-H3Models {
     param([string]$ComfyRoot, [string]$Python, [string]$InstallRoot, $Profile)
     $downloader = Join-Path $script:AssetsRoot "download_models.py"
@@ -154,6 +175,8 @@ function Install-H3Models {
     $statusPath = Join-Path $InstallRoot "downloads\model-progress.json"
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $statusPath) | Out-Null
     Remove-Item -LiteralPath $statusPath -Force -ErrorAction SilentlyContinue
+    Get-ChildItem -LiteralPath (Split-Path -Parent $statusPath) -Filter "model-progress.json*.tmp" -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
 
     $sourceOrder = if (Test-ChinaMirrorPriority) { "mirror-first" } else { "official-first" }
     Add-Log "Model download route: $sourceOrder"
@@ -173,7 +196,7 @@ function Install-H3Models {
     while (-not $process.WaitForExit(500)) {
         if (Test-Path -LiteralPath $statusPath) {
             try {
-                $state = Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json
+                $state = Read-SharedJsonFile -Path $statusPath
                 $overall = if ($state.total_bytes -gt 0) { [int](100 * $state.completed_bytes / $state.total_bytes) } else { 0 }
                 $label = if ($state.phase -eq "verify") {
                     "Verifying $($state.name)"
