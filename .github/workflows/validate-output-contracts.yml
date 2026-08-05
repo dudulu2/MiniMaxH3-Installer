@@ -26,7 +26,7 @@ jobs:
           function Set-Stage { param([string]$Text, [int]$Percent = -1) }
           function Pump-UI {}
 
-          function Import-FunctionFromFile {
+          function Get-FunctionTextFromFile {
             param([string]$Path, [string]$Name)
             $tokens = $null
             $errors = $null
@@ -37,13 +37,13 @@ jobs:
               $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $Name
             }, $true)
             if (-not $functionAst) { throw "Function $Name was not found in $Path" }
-            Invoke-Expression $functionAst.Extent.Text
+            return $functionAst.Extent.Text
           }
 
-          Import-FunctionFromFile 'Install-MiniMaxH3.ps1' 'Invoke-ProcessChecked'
-          Import-FunctionFromFile 'Install-MiniMaxH3.ps1' 'New-HttpClient'
-          Import-FunctionFromFile 'Install-MiniMaxH3.ps1' 'Invoke-SimpleDownload'
-          Import-FunctionFromFile 'Install-MiniMaxH3.ps1' 'Install-PythonRuntime'
+          Invoke-Expression (Get-FunctionTextFromFile 'Install-MiniMaxH3.ps1' 'Invoke-ProcessChecked')
+          Invoke-Expression (Get-FunctionTextFromFile 'Install-MiniMaxH3.ps1' 'New-HttpClient')
+          Invoke-Expression (Get-FunctionTextFromFile 'Install-MiniMaxH3.ps1' 'Invoke-SimpleDownload')
+          Invoke-Expression (Get-FunctionTextFromFile 'Install-MiniMaxH3.ps1' 'Install-PythonRuntime')
 
           $successOutput = @(Invoke-ProcessChecked $env:ComSpec '/c exit 0' $script:InstallerRoot)
           if ($successOutput.Count -ne 0) {
