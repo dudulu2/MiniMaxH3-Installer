@@ -1,38 +1,67 @@
-﻿# MiniMax H3 一键安装器（中文说明）
+﻿# MiniMax H3 一键安装器（硬件自动配置版）
+
+双击 `Start-Installer.bat` 后，安装器会先检测 NVIDIA 显卡、显存、系统内存、驱动和目标磁盘空间，并在开始下载前询问要安装哪一种 MiniMax H3 配置。
+
+## 支持范围
+
+- Windows 10/11 64 位，需有桌面环境
+- NVIDIA RTX 3060 级别到 RTX 5090 级别显卡
+- 兼容配置最低要求：8 GB 显存、16 GB 系统内存
+- RTX 30/40 系建议 NVIDIA 驱动 560 或更新
+- RTX 50 系建议 NVIDIA 驱动 570 或更新
+- 安装期间需要联网
+
+存在多张 NVIDIA 显卡时，安装器会默认选择显存最大的一张，并通过 `CUDA_VISIBLE_DEVICES` 把对应物理 GPU 编号写入启动器。
+
+## 三种安装配置
+
+| 配置 | 适用硬件 | 扩散模型 / 文本编码器 | 默认输出 | 最低可用空间 |
+|---|---|---|---|---:|
+| 兼容配置 | RTX 3060/4060 及其他 8–16 GB 显卡；16–32 GB 内存 | Pruned INT8 ConvRot / NVFP4 AWQ | 608×352、5 秒、24fps | 60 GiB |
+| 4090/5090 平衡配置 | RTX 4090 或 RTX 5090，至少 32 GB 内存 | Pruned FP8 Scaled / NVFP4 AWQ | 864×480、5 秒、24fps | 60 GiB |
+| 64 GB 高质量配置 | 24 GB 以上显存、至少 64 GB 内存 | Pruned BF16 / INT8 ConvRot | 960×544、5 秒、24fps | 90 GiB |
+
+选择 `Auto` 时：
+
+- 普通 8–16 GB 显卡推荐“兼容配置”；
+- 24 GB 以上显存、32–63 GB 内存推荐“4090/5090 平衡配置”；
+- 24 GB 以上显存、64 GB 以上内存推荐“64 GB 高质量配置”。
+
+也可以手动选择，但安装器会按所选配置重新检查显存、内存和磁盘空间，不符合最低条件时会阻止安装。
+
+## CUDA 运行环境自动选择
+
+- RTX 30、RTX 40 系：PyTorch `2.8.0+cu126`
+- RTX 50 系 / Blackwell：PyTorch `2.8.0+cu128`
+
+Torchvision 和 Torchaudio 会安装相匹配的 `0.23.0` / `2.8.0` CUDA 构建。开始下载 H3 模型前，安装器会验证精确版本、CUDA 是否可用、CUDA 运行时版本以及实际识别到的显卡。
+
+## 安装内容
+
+- 固定版本 ComfyUI：commit `0764232429b8cfb10b79b6f186c8cb23e0b22897`
+- 独立 Python 3.10 和虚拟环境，不污染系统 Python
+- 根据显卡自动选择的 PyTorch CUDA 运行环境
+- 所选配置对应的一份 FL2VA 扩散模型
+- 所选配置对应的一份 Qwen3-VL 32B MiniMax H3 文本编码器
+- MiniMax H3 视频 VAE 和音频 VAE
+- 自动生成与配置匹配的工作流，包括模型名和默认分辨率
+- `Start MiniMax H3.bat`、`Stop MiniMax H3.bat`、日志、安装清单和可选桌面快捷方式
+
+当前版本安装的是标准 FL2VA 工作流，支持文生视频以及可选首帧/尾帧条件。Ref2VA 的参考图片、参考视频和参考音频权重暂未包含在这一版安装器中。
+
+启动时不使用 `--lowvram`，由 PyTorch 2.8 DynamicVRAM 管理显存。不安装 SeedVR2、xformers、SageAttention、FlashAttention、Triton。
+
+## 下载与校验
+
+官方模型文件大小和 SHA-256 全部记录在 `assets/hf_model_inventory.json`。下载会优先使用 Hugging Face，失败后切换 `hf-mirror`；保留未完成文件，支持 HTTP Range 断点续传，并在继续安装前校验完整文件。
 
 ## 使用方法
 
-1. 双击 `Start-Installer.bat`（如果 Windows 提示“已保护你的电脑”，点“更多信息”然后“仍要运行”）。
-2. 选择安装位置（建议 `D:\MiniMaxH3`），点“Check computer”检查电脑。
-3. 通过检查后点“Install / Repair”，等待模型下载完成。
-4. 安装结束后，双击安装目录里的 `Start MiniMax H3.bat`（或桌面快捷方式），浏览器会自动打开 ComfyUI 并载入 H3 工作流。
+1. 双击 `Start-Installer.bat`。
+2. 查看检测到的显卡和内存，接受 `Auto` 推荐，或手动选择三种配置之一。
+3. 选择安装目录并点击 **Check computer**。
+4. 点击 **Install / Repair**。
+5. 安装完成后运行 `Start MiniMax H3.bat` 或桌面快捷方式。
+6. 关机或移动安装目录前运行 `Stop MiniMax H3.bat`。
 
-## 适用电脑
-
-- Windows 10/11 64 位
-- NVIDIA 显卡，显存至少 8 GB（8 GB 已按本机验证）
-- 内存至少 16 GB
-- 显卡驱动建议 560 或更新
-- 目标磁盘至少 60 GB 可用空间（建议 70 GB）
-
-## 装的是什么
-
-- 固定版本的 ComfyUI（commit `0764232`）
-- 独立 Python 3.10 环境和虚拟环境，不污染系统 Python
-- PyTorch `2.8.0+cu126` / Torchvision `0.23.0+cu126` / Torchaudio `2.8.0+cu126`
-- MiniMax H3 INT8 扩散模型 + Qwen NVFP4 文本编码器 + 视频/音频 VAE（共约 39.6 GiB）
-- 预配置工作流 `MiniMax_H3_8GB.json`：16:9、608×352、5 秒、24fps
-
-不安装 SeedVR2、xformers、SageAttention、FlashAttention、Triton。启动时不用 `--lowvram`，由 PyTorch 2.8 DynamicVRAM 自行管理显存。
-
-## 下载说明
-
-- 优先官方源，失败自动切换到镜像（hf-mirror / 阿里云 / 清华）。
-- 四个模型文件都做 SHA-256 校验，支持断点续传。
-- 下载中断后直接再点一次“Install / Repair”即可继续。
-
-## 常见问题
-
-- 端口 8188 被占用：关闭占用程序，或先点 `Stop MiniMax H3.bat`。
-- 启动后界面空白：首次打开会自动载入工作流；如果没有，点击顶部工作流菜单选择 `MiniMax_H3_8GB.json`。
-- 想完全删除：关闭 ComfyUI，删除整个安装目录和桌面快捷方式即可（不写注册表）。
+目前代码和静态校验已经覆盖三种配置，但约 40–68 GiB 模型的完整下载和实际生成性能，仍需分别在 RTX 3060、RTX 4090 和 RTX 5090 代表机器上做端到端实测后，才能作为正式发布版本。
