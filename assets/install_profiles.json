@@ -59,15 +59,15 @@
       "mirror_index_url": "https://mirrors.aliyun.com/pytorch-wheels/cu126",
       "minimum_driver_major": 560
     },
-    "cuda128": {
-      "label": "PyTorch 2.8.0 CUDA 12.8 (RTX 50 series)",
-      "torch": "2.8.0+cu128",
-      "torchvision": "0.23.0+cu128",
-      "torchaudio": "2.8.0+cu128",
-      "cuda_version": "12.8",
-      "index_url": "https://download.pytorch.org/whl/cu128",
+    "cuda130": {
+      "label": "PyTorch 2.10.0 CUDA 13.0 (RTX 50 series optimized)",
+      "torch": "2.10.0+cu130",
+      "torchvision": "0.25.0+cu130",
+      "torchaudio": "2.10.0+cu130",
+      "cuda_version": "13.0",
+      "index_url": "https://download.pytorch.org/whl/cu130",
       "mirror_index_url": "",
-      "minimum_driver_major": 570
+      "minimum_driver_major": 580
     }
   }
 }

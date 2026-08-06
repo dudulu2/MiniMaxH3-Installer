@@ -1,0 +1,39 @@
+name: Validate CUDA 13 upgrade
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  validate-cu130-upgrade:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate PowerShell syntax and runtime wiring
+        shell: powershell
+        run: |
+          foreach ($path in @('Install-MiniMaxH3.ps1', 'Start-Installer.ps1', 'assets/hardware_profiles_core.ps1', 'assets/hardware_profiles_install.ps1', 'assets/local_torch_wheels.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Error
+              exit 1
+            }
+          }
+
+          $profiles = Get-Content assets/install_profiles.json -Raw | ConvertFrom-Json
+          $runtime = $profiles.runtimes.cuda130
+          if (-not $runtime) { throw 'cuda130 runtime is missing.' }
+          if ($runtime.torch -ne '2.10.0+cu130') { throw 'Unexpected CUDA 13 Torch version.' }
+          if ($runtime.torchvision -ne '0.25.0+cu130') { throw 'Unexpected CUDA 13 Torchvision version.' }
+          if ($runtime.torchaudio -ne '2.10.0+cu130') { throw 'Unexpected CUDA 13 TorchAudio version.' }
+          if ([int]$runtime.minimum_driver_major -lt 580) { throw 'CUDA 13 driver floor must be 580 or newer.' }
+
+          $local = Get-Content assets/local_torch_wheels.ps1 -Raw
+          foreach ($needle in @('return "cuda130"', 'pip uninstall -y torch torchvision torchaudio', '--upgrade-strategy only-if-needed', '-m pip check')) {
+            if (-not $local.Contains($needle)) { throw "Missing upgrade behavior: $needle" }
+          }

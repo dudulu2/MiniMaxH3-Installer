@@ -8,7 +8,7 @@ Double-click `Start-Installer.bat`. The installer detects the NVIDIA GPU, VRAM, 
 - NVIDIA RTX 3060-class through RTX 5090-class GPUs
 - At least 8 GB VRAM and 16 GB system RAM for the compatibility profile
 - NVIDIA driver 560 or newer recommended for RTX 30/40 series
-- NVIDIA driver 570 or newer recommended for RTX 50 series
+- NVIDIA driver 580 or newer required for the RTX 50-series CUDA 13.0 runtime
 - Internet access during installation
 
 The installer chooses the highest-VRAM NVIDIA GPU when more than one GPU is present and writes that physical GPU index into the launcher through `CUDA_VISIBLE_DEVICES`.
@@ -25,10 +25,26 @@ The installer chooses the highest-VRAM NVIDIA GPU when more than one GPU is pres
 
 ## CUDA runtime selection
 
-- RTX 30 and RTX 40 series: PyTorch `2.8.0+cu126`
-- RTX 50 series / Blackwell: PyTorch `2.8.0+cu128`
+- RTX 30 and RTX 40 series: PyTorch `2.8.0+cu126`, Torchvision `0.23.0+cu126`, TorchAudio `2.8.0+cu126`
+- RTX 50 series / Blackwell: PyTorch `2.10.0+cu130`, Torchvision `0.25.0+cu130`, TorchAudio `2.10.0+cu130`
 
-Torchvision and Torchaudio are installed at the matching `0.23.0` / `2.8.0` CUDA build. The installer verifies the exact package versions, CUDA availability, CUDA runtime version, and detected GPU before downloading the H3 models.
+The installer verifies the exact package versions, CUDA availability, CUDA runtime version, and detected GPU before downloading the H3 models.
+
+## Upgrade an existing installation
+
+Select the same installation directory and click **Install / Repair**. The installer preserves models, user workflows, logs, launchers, and partial model downloads. If the installed PyTorch runtime does not match the selected GPU runtime, the old Torch/Torchvision/TorchAudio packages are removed and the matching set is installed. ComfyUI requirements are then refreshed with `--upgrade --upgrade-strategy only-if-needed`, followed by `pip check` and a CUDA verification run.
+
+For an existing RTX 50-series installation this upgrades the previous PyTorch 2.8 CUDA 12.8 environment to PyTorch 2.10 CUDA 13.0 without downloading the H3 models again when their verified files are already present.
+
+## Local PyTorch wheels
+
+The installer searches its root and `assets` recursively for exact Python 3.10 Windows wheels matching the selected runtime. For RTX 50-series systems the optional local files are:
+
+- `torch-2.10.0+cu130-cp310-cp310-win_amd64.whl`
+- `torchvision-0.25.0+cu130-cp310-cp310-win_amd64.whl`
+- `torchaudio-2.10.0+cu130-cp310-cp310-win_amd64.whl`
+
+A local Torch wheel is used first. Missing matching Torchvision or TorchAudio wheels are downloaded individually. If no matching local Torch wheel exists, the full matching runtime is downloaded from the configured PyTorch source.
 
 ## Installed stack
 
@@ -43,11 +59,11 @@ Torchvision and Torchaudio are installed at the matching `0.23.0` / `2.8.0` CUDA
 
 The current installer deploys the standard FL2VA workflow for text generation and optional first/last frame conditioning. Ref2VA reference-image/video/audio weights are not installed by this version.
 
-The launcher does not use `--lowvram`; ComfyUI uses the PyTorch 2.8 DynamicVRAM path. SeedVR2, xformers, SageAttention, FlashAttention, and Triton are not installed.
+The launcher does not use `--lowvram`; ComfyUI uses DynamicVRAM. SeedVR2, xformers, SageAttention, FlashAttention, and Triton are not installed.
 
 ## Download routes and safety
 
-The main installer window includes **China mainland mirror priority**. When enabled, Python uses npmmirror first, normal Python packages use the Tsinghua PyPI mirror first, CUDA 12.6 PyTorch uses the Aliyun mirror first, and MiniMax H3 models use `hf-mirror` first. Every configured official source remains the automatic fallback. CUDA 12.8 currently has no verified bundled China mirror and therefore continues to use the official PyTorch source.
+The main installer window includes **China mainland mirror priority**. When enabled, Python uses npmmirror first, normal Python packages use the Tsinghua PyPI mirror first, CUDA 12.6 PyTorch uses the Aliyun mirror first, and MiniMax H3 models use `hf-mirror` first. Every configured official source remains the automatic fallback. CUDA 13.0 currently has no verified bundled China mirror and therefore uses the official PyTorch source unless matching local wheels are supplied.
 
 When the option is disabled, official sources are attempted first and mirrors remain automatic fallbacks. The selected route is locked while an installation is running and is written to the installation manifest.
 
