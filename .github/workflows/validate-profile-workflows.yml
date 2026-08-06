@@ -1,0 +1,62 @@
+name: Validate profile workflows
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate-profile-workflows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse PowerShell files
+        shell: powershell
+        run: |
+          foreach ($path in @('Start-Installer.ps1', 'assets/workflow_profile_fix.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Error
+              exit 1
+            }
+          }
+
+      - name: Generate and inspect every profile workflow
+        shell: powershell
+        run: |
+          $script:AssetsRoot = (Resolve-Path 'assets').Path
+          function Add-Log { param([string]$Message, [string]$Level = 'INFO') }
+          . (Join-Path $script:AssetsRoot 'workflow_profile_fix.ps1')
+
+          $config = Get-Content assets/install_profiles.json -Raw | ConvertFrom-Json
+          $known = @(
+            'minimax_h3_fl2va_pruned_int8_convrot.safetensors',
+            'minimax_h3_fl2va_pruned_fp8_scaled.safetensors',
+            'minimax_h3_fl2va_pruned_bf16.safetensors'
+          )
+
+          foreach ($profile in @($config.profiles)) {
+            $root = Join-Path $env:RUNNER_TEMP ("workflow-" + $profile.id)
+            New-Item -ItemType Directory -Force -Path $root | Out-Null
+            $name = New-ProfileWorkflow -ComfyRoot $root -Profile $profile
+            $path = Join-Path $root ("user\default\workflows\" + $name)
+            if (-not (Test-Path -LiteralPath $path)) { throw "Workflow was not created for $($profile.id)." }
+            $json = Get-Content -LiteralPath $path -Raw
+            $selected = Split-Path -Leaf ([string]$profile.diffusion_model)
+            if (-not $json.Contains($selected)) { throw "Selected diffusion model is absent for $($profile.id)." }
+            foreach ($model in $known) {
+              if ($model -ne $selected -and $json.Contains($model)) {
+                throw "Workflow $($profile.id) contains foreign diffusion model metadata: $model"
+              }
+            }
+          }
+
+      - name: Verify refreshed autoload key
+        shell: powershell
+        run: |
+          $text = Get-Content Start-Installer.ps1 -Raw
+          if ($text -notmatch 'workflow_profile_fix\.ps1') { throw 'Workflow override is not loaded.' }
+          if ($text -notmatch 'minimax-h3-workflow-\$\(\$Profile\.id\)-v2') { throw 'Autoload key was not refreshed.' }
