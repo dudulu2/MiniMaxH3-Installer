@@ -24,8 +24,9 @@ if (-not $text.Contains($needle)) { throw "Could not locate the installer extens
 $text = $text.Replace($needle, $replacement)
 
 # Stamp the public installer release version into the generated installation manifest.
-$legacyVersion = 'installer_version = "1.1"'
+$legacyVersion = 'installer_version = "1.1"'.Replace('\"','"')
 $currentVersion = 'installer_version = "' + $installerVersion + '"'
+$currentVersion = $currentVersion.Replace('\"','"')
 if ($text.Contains($legacyVersion)) {
     $text = $text.Replace($legacyVersion, $currentVersion)
 } elseif (-not $text.Contains($currentVersion)) {
