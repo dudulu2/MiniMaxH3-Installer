@@ -261,7 +261,7 @@ function Get-HardwareReport {
         } else {
             "Automatically follows the selected installation profile."
         }
-        $report.Items.Add([PSCustomObject]@{
+        [void]$report.Items.Add([PSCustomObject]@{
             Name = "Main model"
             Value = ("{0} ({1:N1} GiB)" -f (Split-Path -Leaf $path), $size)
             Status = $status
