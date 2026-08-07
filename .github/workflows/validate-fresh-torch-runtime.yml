@@ -1,0 +1,61 @@
+name: Validate fresh PyTorch environment
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate-fresh-torch-environment:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse local Torch installer
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'assets/local_torch_wheels.ps1'), [ref]$tokens, [ref]$errors)
+          if ($errors.Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
+
+      - name: Verify empty and partial runtime objects are safe
+        shell: powershell
+        run: |
+          Set-StrictMode -Version 2.0
+          function Test-IsBlackwellGpu { param([string]$GpuName) return $false }
+          function Add-Log { param([string]$Message, [string]$Level = 'INFO') }
+          function Set-Stage { param([string]$Text, [int]$Percent = -1) }
+          function Invoke-ProcessChecked { param([string]$FilePath, [string]$Arguments, [string]$WorkingDirectory, [switch]$AllowFailure); return 0 }
+          function Invoke-PipWithFallback { param([string]$Python, [string]$PackageArguments, $Runtime, [switch]$NeedsTorchIndex) }
+          $script:InstallerRoot = $env:RUNNER_TEMP
+          $script:AssetsRoot = (Resolve-Path 'assets').Path
+
+          . ./assets/local_torch_wheels.ps1
+
+          $runtime = [PSCustomObject]@{
+            label = 'PyTorch 2.8.0 CUDA 12.6'
+            torch = '2.8.0+cu126'
+            torchvision = '0.23.0+cu126'
+            torchaudio = '2.8.0+cu126'
+            cuda_version = '12.6'
+          }
+
+          $empty = [PSCustomObject]@{}
+          if (Test-TorchRuntimeMatches -Installed $empty -Runtime $runtime) {
+            throw 'An empty fresh-environment object must not match an installed runtime.'
+          }
+          Remove-OldTorchRuntime -Python 'python.exe' -Installed $empty -Runtime $runtime
+
+          $partial = [PSCustomObject]@{ torch = '2.8.0+cu126' }
+          if (Test-TorchRuntimeMatches -Installed $partial -Runtime $runtime) {
+            throw 'A partial runtime object must not be considered a complete match.'
+          }
+
+          foreach ($name in @('torch','torchvision','torchaudio','cuda')) {
+            $value = Get-TorchRuntimeField -Object $empty -Name $name
+            if ($null -eq $value) { throw "Safe field lookup returned null for $name" }
+          }
