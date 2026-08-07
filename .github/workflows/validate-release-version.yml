@@ -1,0 +1,60 @@
+name: Validate release version
+
+on:
+  pull_request:
+  push:
+    branches: [main, v1.0.0]
+
+jobs:
+  validate-release-version:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse release scripts
+        shell: powershell
+        run: |
+          foreach ($path in @('Start-Installer.ps1', 'assets/release_version_override.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Error
+              exit 1
+            }
+          }
+
+      - name: Verify manifest version override
+        shell: powershell
+        run: |
+          function Add-Log { param([string]$Message, [string]$Level = 'INFO') }
+          function Install-WorkflowAndLauncher {
+            param(
+              [string]$InstallRoot,
+              [string]$ComfyRoot,
+              [string]$VenvPython,
+              $Profile,
+              $Runtime,
+              [int]$GpuIndex
+            )
+            New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
+            [ordered]@{ installer_version = '1.1'; profile = 'test' } |
+              ConvertTo-Json |
+              Set-Content -LiteralPath (Join-Path $InstallRoot '.minimax-h3-install.json') -Encoding UTF8
+          }
+
+          . ./assets/release_version_override.ps1
+          $root = Join-Path $env:RUNNER_TEMP 'minimax-release-version-test'
+          Install-WorkflowAndLauncher -InstallRoot $root -ComfyRoot $root -VenvPython 'python.exe' -Profile $null -Runtime $null -GpuIndex 0
+          $manifest = Get-Content -LiteralPath (Join-Path $root '.minimax-h3-install.json') -Raw | ConvertFrom-Json
+          if ($manifest.installer_version -ne '1.0.0') {
+            throw "Expected installer_version 1.0.0, got $($manifest.installer_version)"
+          }
+
+      - name: Ensure old fatal lookup is gone
+        shell: powershell
+        run: |
+          $text = Get-Content Start-Installer.ps1 -Raw
+          if ($text.Contains('Could not locate the installer version field.')) {
+            throw 'The old fatal installer-version lookup is still present.'
+          }
