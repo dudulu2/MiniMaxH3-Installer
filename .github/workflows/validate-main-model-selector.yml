@@ -31,7 +31,8 @@ jobs:
           $script:CatalogPath = (Resolve-Path 'assets/hf_model_inventory.json').Path
           $script:ProfileConfig = Get-Content $script:ProfilesPath -Raw | ConvertFrom-Json
           $script:Profiles = @($script:ProfileConfig.profiles)
-          $script:ModelCatalog = @(Get-Content $script:CatalogPath -Raw | ConvertFrom-Json)
+          $catalogPayload = Get-Content $script:CatalogPath -Raw | ConvertFrom-Json
+          $script:ModelCatalog = @($catalogPayload | ForEach-Object { $_ })
 
           function Add-Log { param([string]$Message, [string]$Level = 'INFO') }
           function Get-ModelCatalogItem {
