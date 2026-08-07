@@ -1,0 +1,80 @@
+name: Validate installer cancellation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate-install-cancellation:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse cancellation PowerShell
+        shell: powershell
+        run: |
+          foreach ($path in @('Start-Installer.ps1', 'assets/install_cancellation.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Error
+              exit 1
+            }
+          }
+
+      - name: Verify launcher wiring
+        shell: powershell
+        run: |
+          $start = Get-Content Start-Installer.ps1 -Raw
+          foreach ($needle in @(
+            'install_cancellation.ps1',
+            'Initialize-InstallCancellationUI',
+            'Begin-InstallCancellationUI',
+            'Complete-InstallCancellationUI'
+          )) {
+            if (-not $start.Contains($needle)) { throw "Missing cancellation wiring: $needle" }
+          }
+
+          $local = $start.IndexOf('local_torch_wheels.ps1')
+          $cancel = $start.IndexOf('install_cancellation.ps1')
+          $mainModel = $start.IndexOf('main_model_selector.ps1')
+          if (-not ($local -lt $cancel -and $cancel -lt $mainModel)) {
+            throw 'Cancellation layer must load after local torch support and before the main-model wrapper.'
+          }
+
+          $cancelText = Get-Content assets/install_cancellation.ps1 -Raw
+          if ($cancelText -match '(?im)^\s*\$pid\s*=') { throw 'Cancellation code must not overwrite the automatic $PID variable.' }
+          if (-not $cancelText.Contains('$form.ControlBox = $true')) { throw 'Stop completion does not restore the title-bar close button.' }
+          if (-not $cancelText.Contains('Model download parts already written to disk will be kept')) { throw 'Stop confirmation does not document resumable model parts.' }
+
+      - name: Verify cancellation exception and process termination
+        shell: powershell
+        run: |
+          Set-StrictMode -Version 2.0
+          function Add-Log { param([string]$Message, [string]$Level = 'INFO') }
+          function Pump-UI { }
+          function New-HttpClient { throw 'not used in this test' }
+          function Set-Stage { param([string]$Text, [int]$Percent = -1) }
+          function Test-ChinaMirrorPriority { return $false }
+          function Get-ModelDownloadMode { return 'auto' }
+          function Read-SharedJsonFile { param([string]$Path); return $null }
+          function Format-DownloadSpeed { param([double]$BytesPerSecond); return '' }
+          function Format-DownloadEta { param([int64]$Seconds); return '' }
+          $script:IsInstalling = $true
+
+          . ./assets/install_cancellation.ps1
+
+          $ex = New-InstallCancelledException
+          if ($ex -isnot [System.OperationCanceledException]) { throw 'Wrong cancellation exception type.' }
+
+          $proc = Start-Process powershell.exe -ArgumentList '-NoProfile -Command "Start-Sleep -Seconds 30"' -WindowStyle Hidden -PassThru
+          try {
+            Set-ActiveInstallerProcess -Process $proc -Label 'CI cancellation child' -Protected $false
+            Stop-ActiveInstallerProcess
+            for ($i = 0; $i -lt 20 -and -not $proc.HasExited; $i++) { Start-Sleep -Milliseconds 250 }
+            if (-not $proc.HasExited) { throw 'Stop-ActiveInstallerProcess did not terminate the child process.' }
+          } finally {
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+          }
