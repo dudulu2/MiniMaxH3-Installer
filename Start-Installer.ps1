@@ -26,8 +26,6 @@ $text = $text.Replace($needle, $replacement)
 # Stamp the public installer release version into the generated installation manifest.
 $legacyVersion = 'installer_version = "1.1"'
 $currentVersion = 'installer_version = "' + $installerVersion + '"'
-$legacyVersion = $legacyVersion -replace '\\"', '"'
-$currentVersion = $currentVersion -replace '\\"', '"'
 if ($text.Contains($legacyVersion)) {
     $text = $text.Replace($legacyVersion, $currentVersion)
 } elseif (-not $text.Contains($currentVersion)) {
