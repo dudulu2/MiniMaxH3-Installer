@@ -27,6 +27,8 @@ jobs:
       - name: Validate allowed model catalog and profile override
         shell: powershell
         run: |
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName System.Drawing
           $script:ProfilesPath = (Resolve-Path 'assets/install_profiles.json').Path
           $script:CatalogPath = (Resolve-Path 'assets/hf_model_inventory.json').Path
           $script:ProfileConfig = Get-Content $script:ProfilesPath -Raw | ConvertFrom-Json
