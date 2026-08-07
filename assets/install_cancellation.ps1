@@ -54,9 +54,9 @@ function Stop-ActiveInstallerProcess {
     }
 
     try {
-        $pid = [int]$process.Id
-        Add-Log "Stopping current installer process tree (PID $pid): $($script:ActiveInstallerProcessLabel)" "WARN"
-        & taskkill.exe /PID $pid /T /F *> $null
+        $processId = [int]$process.Id
+        Add-Log "Stopping current installer process tree (PID $processId): $($script:ActiveInstallerProcessLabel)" "WARN"
+        & taskkill.exe /PID $processId /T /F *> $null
     } catch {
         try { $process.Kill() } catch { }
     }
