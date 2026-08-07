@@ -2,6 +2,7 @@
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$installerVersion = "1.0.0"
 $source = Join-Path $root "Install-MiniMaxH3.ps1"
 $torchOverride = Join-Path $root "assets\local_torch_wheels.ps1"
 $runtimeSelector = Join-Path $root "assets\runtime_channel_selector.ps1"
@@ -21,6 +22,15 @@ $replacement = $needle + [Environment]::NewLine +
     '. (Join-Path $script:AssetsRoot "workflow_profile_fix.ps1")'
 if (-not $text.Contains($needle)) { throw "Could not locate the installer extension point." }
 $text = $text.Replace($needle, $replacement)
+
+# Stamp the public installer release version into the generated installation manifest.
+$legacyVersion = 'installer_version = "1.1"'
+$currentVersion = 'installer_version = "' + $installerVersion + '"'
+if ($text.Contains($legacyVersion)) {
+    $text = $text.Replace($legacyVersion, $currentVersion)
+} elseif (-not $text.Contains($currentVersion)) {
+    throw "Could not locate the installer version field."
+}
 
 # Force one new first-run load after this workflow metadata correction. The key
 # remains profile-specific, so Compatibility, Balanced, and Quality do not share
