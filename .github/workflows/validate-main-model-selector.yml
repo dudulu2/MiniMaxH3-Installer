@@ -1,0 +1,121 @@
+name: Validate main model selector
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate-main-model-selector:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse PowerShell files
+        shell: powershell
+        run: |
+          foreach ($path in @('Start-Installer.ps1', 'assets/main_model_selector.ps1', 'assets/runtime_channel_selector.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Error
+              exit 1
+            }
+          }
+
+      - name: Validate allowed model catalog and profile override
+        shell: powershell
+        run: |
+          $script:ProfilesPath = (Resolve-Path 'assets/install_profiles.json').Path
+          $script:CatalogPath = (Resolve-Path 'assets/hf_model_inventory.json').Path
+          $script:ProfileConfig = Get-Content $script:ProfilesPath -Raw | ConvertFrom-Json
+          $script:Profiles = @($script:ProfileConfig.profiles)
+          $script:ModelCatalog = @(Get-Content $script:CatalogPath -Raw | ConvertFrom-Json)
+
+          function Add-Log { param([string]$Message, [string]$Level = 'INFO') }
+          function Get-ModelCatalogItem {
+            param([string]$Path)
+            $item = $script:ModelCatalog | Where-Object { [string]$_.path -eq $Path } | Select-Object -First 1
+            if (-not $item) { throw "Missing catalog model: $Path" }
+            return [PSCustomObject]@{ Path=[string]$item.path; Size=[int64]$item.size; Sha256=[string]$item.sha256 }
+          }
+          function Get-ProfileModelBytes {
+            param($Profile)
+            $total = [int64]0
+            foreach ($path in @($Profile.diffusion_model, $Profile.text_encoder, $Profile.video_vae, $Profile.audio_vae)) {
+              $total += (Get-ModelCatalogItem -Path ([string]$path)).Size
+            }
+            return $total
+          }
+          function Get-ProfileById {
+            param([string]$Id)
+            $profile = $script:Profiles | Where-Object { [string]$_.id -eq $Id } | Select-Object -First 1
+            if (-not $profile) { throw "Unknown profile: $Id" }
+            return $profile
+          }
+          function Get-HardwareReport {
+            param([string]$InstallPath)
+            $items = New-Object System.Collections.Generic.List[object]
+            [void]$items.Add([PSCustomObject]@{ Name='Base'; Value='ok'; Status='PASS'; Detail='stub' })
+            return [PSCustomObject]@{ Items=$items; Blocking=$false; ProfileId='compatibility' }
+          }
+          function Install-H3Models {
+            param([string]$ComfyRoot, [string]$Python, [string]$InstallRoot, $Profile)
+            $payload = Get-Content $script:ProfilesPath -Raw | ConvertFrom-Json
+            $actual = $payload.profiles | Where-Object { [string]$_.id -eq [string]$Profile.id } | Select-Object -First 1
+            if ([string]$actual.diffusion_model -ne [string]$Profile.diffusion_model) {
+              throw 'Temporary downloader profile did not receive the selected main model.'
+            }
+            $script:DownloaderOverrideObserved = $true
+          }
+          function Install-WorkflowAndLauncher {
+            param([string]$InstallRoot, [string]$ComfyRoot, [string]$VenvPython, $Profile, $Runtime, [int]$GpuIndex)
+            $web = Join-Path $ComfyRoot 'custom_nodes\minimax_h3_workflow_autoload\web'
+            New-Item -ItemType Directory -Force -Path $web | Out-Null
+            'const key = "minimax-h3-workflow-compatibility-v2";' | Set-Content -LiteralPath (Join-Path $web 'autoload.js') -Encoding UTF8
+          }
+
+          . ./assets/main_model_selector.ps1
+
+          foreach ($model in $script:AllowedMainModels) {
+            if ([string]$model.Path -notlike 'diffusion_models/minimax_h3_fl2va_*') { throw "Unsafe non-FL2VA model exposed: $($model.Path)" }
+            [void](Get-ModelCatalogItem -Path ([string]$model.Path))
+          }
+
+          $fullInt8 = 'diffusion_models/minimax_h3_fl2va_int8_convrot.safetensors'
+          $script:SelectedMainModelPath = $fullInt8
+          $effective = Get-ProfileById -Id 'compatibility'
+          if ([string]$effective.diffusion_model -ne $fullInt8) { throw 'Compatibility profile did not accept manual Full INT8 selection.' }
+          if ([int]$effective.required_free_gib -lt 60) { throw 'Dynamic disk requirement unexpectedly dropped below base requirement.' }
+
+          $reports = @(Get-HardwareReport -InstallPath $env:RUNNER_TEMP)
+          if ($reports.Count -ne 1) { throw "Hardware report wrapper emitted $($reports.Count) values instead of one." }
+          if (-not ($reports[0].Items | Where-Object { $_.Name -eq 'Main model' })) { throw 'Main model hardware report row is missing.' }
+
+          $installRoot = Join-Path $env:RUNNER_TEMP 'h3-main-model-test'
+          New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
+          $script:DownloaderOverrideObserved = $false
+          Install-H3Models -ComfyRoot $installRoot -Python 'python.exe' -InstallRoot $installRoot -Profile $effective
+          if (-not $script:DownloaderOverrideObserved) { throw 'Downloader override was not exercised.' }
+          if ([string]$script:ProfilesPath -ne (Resolve-Path 'assets/install_profiles.json').Path) { throw 'Profiles path was not restored after downloader override.' }
+
+          $comfyRoot = Join-Path $installRoot 'ComfyUI'
+          Install-WorkflowAndLauncher -InstallRoot $installRoot -ComfyRoot $comfyRoot -VenvPython 'python.exe' -Profile $effective -Runtime ([PSCustomObject]@{}) -GpuIndex 0
+          $autoload = Get-Content (Join-Path $comfyRoot 'custom_nodes\minimax_h3_workflow_autoload\web\autoload.js') -Raw
+          if ($autoload -notmatch 'minimax_h3_fl2va_int8_convrot-v3') { throw 'Autoload key does not include the selected main model.' }
+
+      - name: Verify configuration UI and load order
+        shell: powershell
+        run: |
+          $start = Get-Content Start-Installer.ps1 -Raw
+          $main = $start.IndexOf('main_model_selector.ps1')
+          $runtime = $start.IndexOf('runtime_channel_selector.ps1')
+          $workflow = $start.IndexOf('workflow_profile_fix.ps1')
+          if ($main -lt 0 -or $runtime -lt 0 -or $workflow -lt 0) { throw 'Installer extension load order is incomplete.' }
+          if (-not ($main -lt $runtime -and $runtime -lt $workflow)) { throw 'Main model selector must load before runtime UI and workflow override.' }
+
+          $ui = Get-Content assets/runtime_channel_selector.ps1 -Raw
+          foreach ($needle in @('Adjust main model...', 'Show-MainModelSelectionDialog', 'SelectedMainModelPath')) {
+            if (-not $ui.Contains($needle)) { throw "Configuration UI is missing: $needle" }
+          }
