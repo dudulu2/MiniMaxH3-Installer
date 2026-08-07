@@ -4,17 +4,20 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $source = Join-Path $root "Install-MiniMaxH3.ps1"
 $torchOverride = Join-Path $root "assets\local_torch_wheels.ps1"
+$runtimeSelector = Join-Path $root "assets\runtime_channel_selector.ps1"
 $workflowOverride = Join-Path $root "assets\workflow_profile_fix.ps1"
 $patched = Join-Path $root ".Install-MiniMaxH3.runtime.ps1"
 
 if (-not (Test-Path -LiteralPath $source)) { throw "Installer script is missing: $source" }
 if (-not (Test-Path -LiteralPath $torchOverride)) { throw "Local wheel support script is missing: $torchOverride" }
+if (-not (Test-Path -LiteralPath $runtimeSelector)) { throw "Runtime channel selector script is missing: $runtimeSelector" }
 if (-not (Test-Path -LiteralPath $workflowOverride)) { throw "Workflow profile fix script is missing: $workflowOverride" }
 
 $text = Get-Content -LiteralPath $source -Raw
 $needle = '. (Join-Path $script:AssetsRoot "hardware_profiles_install.ps1")'
 $replacement = $needle + [Environment]::NewLine +
     '. (Join-Path $script:AssetsRoot "local_torch_wheels.ps1")' + [Environment]::NewLine +
+    '. (Join-Path $script:AssetsRoot "runtime_channel_selector.ps1")' + [Environment]::NewLine +
     '. (Join-Path $script:AssetsRoot "workflow_profile_fix.ps1")'
 if (-not $text.Contains($needle)) { throw "Could not locate the installer extension point." }
 $text = $text.Replace($needle, $replacement)
