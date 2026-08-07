@@ -32,8 +32,6 @@ function Get-InstalledTorchRuntime {
     param([string]$Python)
     if (-not (Test-Path -LiteralPath $Python)) { return $null }
 
-    # Always return the same schema. A brand-new venv legitimately has no torch,
-    # and StrictMode must not turn that normal state into a missing-property error.
     $code = "import json; result={'torch':'','torchvision':'','torchaudio':'','cuda':''};`ntry:`n import torch; result['torch']=torch.__version__; result['cuda']=str(torch.version.cuda or '')`nexcept Exception: pass`ntry:`n import torchvision; result['torchvision']=torchvision.__version__`nexcept Exception: pass`ntry:`n import torchaudio; result['torchaudio']=torchaudio.__version__`nexcept Exception: pass`nprint(json.dumps(result))"
     try {
         $json = (& $Python -c $code 2>$null | Select-Object -Last 1)
@@ -47,6 +45,85 @@ function Get-InstalledTorchRuntime {
         }
     } catch {
         return $null
+    }
+}
+
+function Get-PythonToolchainState {
+    param([string]$Python)
+    if (-not (Test-Path -LiteralPath $Python)) { return $null }
+
+    $code = "import json`nfrom importlib.metadata import version, PackageNotFoundError`nnames=['pip','setuptools','wheel','packaging']`nresult={}`nfor name in names:`n try: result[name]=version(name)`n except PackageNotFoundError: result[name]=''`nprint(json.dumps(result))"
+    try {
+        $json = (& $Python -c $code 2>$null | Select-Object -Last 1)
+        if (-not $json) { return $null }
+        return ($json | ConvertFrom-Json)
+    } catch {
+        return $null
+    }
+}
+
+function Test-PythonToolchainReady {
+    param($State)
+    if (-not $State) { return $false }
+    $pip = Get-TorchRuntimeField -Object $State -Name "pip"
+    $setuptools = Get-TorchRuntimeField -Object $State -Name "setuptools"
+    $wheel = Get-TorchRuntimeField -Object $State -Name "wheel"
+    $packaging = Get-TorchRuntimeField -Object $State -Name "packaging"
+    return (
+        $pip -eq "25.1.1" -and
+        -not [string]::IsNullOrWhiteSpace($setuptools) -and
+        -not [string]::IsNullOrWhiteSpace($wheel) -and
+        -not [string]::IsNullOrWhiteSpace($packaging)
+    )
+}
+
+function Invoke-BasePyPiWithFallback {
+    param([string]$Python, [string]$PackageArguments)
+
+    $preferMirror = Test-ChinaMirrorPriority
+    if ($preferMirror) {
+        $primaryArgs = "$PackageArguments --index-url https://pypi.tuna.tsinghua.edu.cn/simple"
+        $primaryLabel = "Tsinghua PyPI mirror"
+        $fallbackArgs = "$PackageArguments --index-url https://pypi.org/simple"
+        $fallbackLabel = "official PyPI"
+    } else {
+        $primaryArgs = "$PackageArguments --index-url https://pypi.org/simple"
+        $primaryLabel = "official PyPI"
+        $fallbackArgs = "$PackageArguments --index-url https://pypi.tuna.tsinghua.edu.cn/simple"
+        $fallbackLabel = "Tsinghua PyPI mirror"
+    }
+
+    Add-Log "Python toolchain source: $primaryLabel"
+    $exit = Invoke-ProcessChecked $Python ("-m pip {0} --timeout 30 --retries 2 --no-cache-dir --disable-pip-version-check" -f $primaryArgs) $script:InstallerRoot -AllowFailure
+    if ($exit -ne 0) {
+        Add-Log "$primaryLabel failed; switching Python toolchain install to $fallbackLabel." "WARN"
+        $null = Invoke-ProcessChecked $Python ("-m pip {0} --timeout 30 --retries 3 --no-cache-dir --disable-pip-version-check" -f $fallbackArgs) $script:InstallerRoot
+    }
+}
+
+function Ensure-PythonToolchain {
+    param([string]$Python)
+
+    $state = Get-PythonToolchainState -Python $Python
+    if (Test-PythonToolchainReady -State $state) {
+        Add-Log ("Python toolchain already ready: pip {0}; setuptools {1}; wheel {2}; packaging {3}. Skipping network check." -f $state.pip, $state.setuptools, $state.wheel, $state.packaging)
+        return
+    }
+
+    Add-Log "Python toolchain is missing or does not match the required baseline; installing locally required packages."
+    Invoke-BasePyPiWithFallback -Python $Python -PackageArguments "install pip==25.1.1 setuptools wheel packaging"
+}
+
+function Test-ComfyRequirementsSatisfied {
+    param([string]$Python, [string]$Requirements)
+    if (-not (Test-Path -LiteralPath $Python) -or -not (Test-Path -LiteralPath $Requirements)) { return $false }
+
+    $code = "import sys`nfrom pathlib import Path`nfrom importlib.metadata import version, PackageNotFoundError`nfrom packaging.requirements import Requirement`nproblems=[]`nfor raw in Path(sys.argv[1]).read_text(encoding='utf-8-sig').splitlines():`n line=raw.strip()`n if not line or line.startswith('#'): continue`n if line.startswith(('-', 'http:', 'https:', 'git+')): problems.append('unsupported:'+line); continue`n try: req=Requirement(line)`n except Exception: problems.append('unparsed:'+line); continue`n if req.marker and not req.marker.evaluate(): continue`n try: installed=version(req.name)`n except PackageNotFoundError: problems.append('missing:'+req.name); continue`n if req.specifier and installed not in req.specifier: problems.append(req.name+'='+installed+' !'+str(req.specifier))`npins={'comfyui-frontend-package':'1.47.12','comfyui-workflow-templates':'0.11.27'}`nfor name,want in pins.items():`n try: installed=version(name)`n except PackageNotFoundError: problems.append('missing:'+name); continue`n if installed != want: problems.append(name+'='+installed+' !='+want)`nsys.exit(0 if not problems else 1)"
+    try {
+        $null = & $Python -c $code $Requirements 2>$null
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
     }
 }
 
@@ -164,10 +241,10 @@ function Install-ComfyEnvironment {
         $null = Invoke-ProcessChecked $BasePython ("-m venv `"{0}`"" -f $venvRoot) $InstallRoot
     }
 
-    Set-Stage "Preparing pip" -1
-    $null = Invoke-PipWithFallback $venvPython "install pip==25.1.1 setuptools wheel packaging --upgrade" $Runtime
+    Set-Stage "Checking Python toolchain" -1
+    Ensure-PythonToolchain -Python $venvPython
 
-    Set-Stage ("Installing {0}" -f $Runtime.label) -1
+    Set-Stage ("Checking {0}" -f $Runtime.label) -1
     Install-SelectedTorchRuntime -Python $venvPython -Runtime $Runtime
 
     $constraints = Join-Path $InstallRoot "runtime\constraints-selected.txt"
@@ -179,10 +256,15 @@ comfyui-frontend-package==1.47.12
 comfyui-workflow-templates==0.11.27
 "@ | Set-Content -LiteralPath $constraints -Encoding ASCII
 
-    Set-Stage "Updating ComfyUI dependencies" -1
     $requirements = Join-Path $comfyRoot "requirements.txt"
-    $dependencyArgs = "install -r `"{0}`" -c `"{1}`" --upgrade --upgrade-strategy only-if-needed" -f $requirements, $constraints
-    $null = Invoke-PipWithFallback $venvPython $dependencyArgs $Runtime
+    Set-Stage "Checking ComfyUI dependencies" -1
+    if (Test-ComfyRequirementsSatisfied -Python $venvPython -Requirements $requirements) {
+        Add-Log "Installed ComfyUI requirements already satisfy the bundled requirements and pinned frontend/template versions. Skipping dependency download."
+    } else {
+        Set-Stage "Updating ComfyUI dependencies" -1
+        $dependencyArgs = "install -r `"{0}`" -c `"{1}`" --upgrade --upgrade-strategy only-if-needed" -f $requirements, $constraints
+        $null = Invoke-PipWithFallback $venvPython $dependencyArgs $Runtime
+    }
 
     Set-Stage "Checking Python dependency consistency" -1
     $null = Invoke-ProcessChecked $venvPython "-m pip check" $comfyRoot
