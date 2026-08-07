@@ -20,14 +20,31 @@ function Find-LocalPythonWheel {
     return $null
 }
 
+function Get-TorchRuntimeField {
+    param($Object, [string]$Name)
+    if (-not $Object) { return "" }
+    $property = $Object.PSObject.Properties[$Name]
+    if (-not $property -or $null -eq $property.Value) { return "" }
+    return [string]$property.Value
+}
+
 function Get-InstalledTorchRuntime {
     param([string]$Python)
     if (-not (Test-Path -LiteralPath $Python)) { return $null }
-    $code = "import json; result={};`ntry:`n import torch; result['torch']=torch.__version__; result['cuda']=str(torch.version.cuda or '')`nexcept Exception: pass`ntry:`n import torchvision; result['torchvision']=torchvision.__version__`nexcept Exception: pass`ntry:`n import torchaudio; result['torchaudio']=torchaudio.__version__`nexcept Exception: pass`nprint(json.dumps(result))"
+
+    # Always return the same schema. A brand-new venv legitimately has no torch,
+    # and StrictMode must not turn that normal state into a missing-property error.
+    $code = "import json; result={'torch':'','torchvision':'','torchaudio':'','cuda':''};`ntry:`n import torch; result['torch']=torch.__version__; result['cuda']=str(torch.version.cuda or '')`nexcept Exception: pass`ntry:`n import torchvision; result['torchvision']=torchvision.__version__`nexcept Exception: pass`ntry:`n import torchaudio; result['torchaudio']=torchaudio.__version__`nexcept Exception: pass`nprint(json.dumps(result))"
     try {
         $json = (& $Python -c $code 2>$null | Select-Object -Last 1)
         if (-not $json) { return $null }
-        return ($json | ConvertFrom-Json)
+        $parsed = $json | ConvertFrom-Json
+        return [PSCustomObject]@{
+            torch = (Get-TorchRuntimeField -Object $parsed -Name "torch")
+            torchvision = (Get-TorchRuntimeField -Object $parsed -Name "torchvision")
+            torchaudio = (Get-TorchRuntimeField -Object $parsed -Name "torchaudio")
+            cuda = (Get-TorchRuntimeField -Object $parsed -Name "cuda")
+        }
     } catch {
         return $null
     }
@@ -35,24 +52,44 @@ function Get-InstalledTorchRuntime {
 
 function Test-TorchRuntimeMatches {
     param($Installed, $Runtime)
-    if (-not $Installed) { return $false }
+    if (-not $Installed -or -not $Runtime) { return $false }
+
+    $installedTorch = Get-TorchRuntimeField -Object $Installed -Name "torch"
+    $installedVision = Get-TorchRuntimeField -Object $Installed -Name "torchvision"
+    $installedAudio = Get-TorchRuntimeField -Object $Installed -Name "torchaudio"
+    $installedCuda = Get-TorchRuntimeField -Object $Installed -Name "cuda"
+
+    if ([string]::IsNullOrWhiteSpace($installedTorch)) { return $false }
     return (
-        [string]$Installed.torch -eq [string]$Runtime.torch -and
-        [string]$Installed.torchvision -eq [string]$Runtime.torchvision -and
-        [string]$Installed.torchaudio -eq [string]$Runtime.torchaudio -and
-        [string]$Installed.cuda -like "$($Runtime.cuda_version)*"
+        $installedTorch -eq [string]$Runtime.torch -and
+        $installedVision -eq [string]$Runtime.torchvision -and
+        $installedAudio -eq [string]$Runtime.torchaudio -and
+        $installedCuda -like "$($Runtime.cuda_version)*"
     )
 }
 
 function Remove-OldTorchRuntime {
     param([string]$Python, $Installed, $Runtime)
     if (-not $Installed) { return }
+
+    $installedTorch = Get-TorchRuntimeField -Object $Installed -Name "torch"
+    $installedVision = Get-TorchRuntimeField -Object $Installed -Name "torchvision"
+    $installedAudio = Get-TorchRuntimeField -Object $Installed -Name "torchaudio"
+    $installedCuda = Get-TorchRuntimeField -Object $Installed -Name "cuda"
+
+    if ([string]::IsNullOrWhiteSpace($installedTorch) -and
+        [string]::IsNullOrWhiteSpace($installedVision) -and
+        [string]::IsNullOrWhiteSpace($installedAudio)) {
+        Add-Log "No existing PyTorch runtime found; installing the selected runtime into the fresh environment."
+        return
+    }
+
     if (Test-TorchRuntimeMatches -Installed $Installed -Runtime $Runtime) {
         Add-Log "Installed PyTorch runtime already matches $($Runtime.label)."
         return
     }
 
-    $oldSummary = "torch=$($Installed.torch), torchvision=$($Installed.torchvision), torchaudio=$($Installed.torchaudio), CUDA=$($Installed.cuda)"
+    $oldSummary = "torch=$installedTorch, torchvision=$installedVision, torchaudio=$installedAudio, CUDA=$installedCuda"
     Add-Log "Existing PyTorch runtime will be upgraded in place: $oldSummary" "WARN"
     Set-Stage "Removing previous PyTorch runtime before upgrade" -1
     $null = Invoke-ProcessChecked $Python "-m pip uninstall -y torch torchvision torchaudio" $script:InstallerRoot -AllowFailure
