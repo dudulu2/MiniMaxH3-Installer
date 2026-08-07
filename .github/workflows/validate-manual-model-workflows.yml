@@ -1,0 +1,49 @@
+name: Validate manual model workflows
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate-manual-model-workflows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate workflows for manual full models
+        shell: powershell
+        run: |
+          $script:AssetsRoot = (Resolve-Path 'assets').Path
+          function Add-Log { param([string]$Message, [string]$Level = 'INFO') }
+          . ./assets/workflow_profile_fix.ps1
+
+          $config = Get-Content assets/install_profiles.json -Raw | ConvertFrom-Json
+          $base = $config.profiles | Where-Object { $_.id -eq 'compatibility' } | Select-Object -First 1
+          if (-not $base) { throw 'Compatibility profile is missing.' }
+
+          foreach ($manualModel in @(
+            'diffusion_models/minimax_h3_fl2va_int8_convrot.safetensors',
+            'diffusion_models/minimax_h3_fl2va_bf16.safetensors'
+          )) {
+            $props = [ordered]@{}
+            foreach ($property in $base.PSObject.Properties) { $props[$property.Name] = $property.Value }
+            $props['diffusion_model'] = $manualModel
+            $profile = [PSCustomObject]$props
+
+            $root = Join-Path $env:RUNNER_TEMP ([IO.Path]::GetFileNameWithoutExtension((Split-Path -Leaf $manualModel)))
+            New-Item -ItemType Directory -Force -Path $root | Out-Null
+            $name = New-ProfileWorkflow -ComfyRoot $root -Profile $profile
+            $path = Join-Path $root ("user\default\workflows\" + $name)
+            $json = Get-Content -LiteralPath $path -Raw
+            $selected = Split-Path -Leaf $manualModel
+
+            if (-not $json.Contains($selected)) { throw "Generated workflow is missing manual model: $selected" }
+            foreach ($foreign in @(
+              'minimax_h3_fl2va_pruned_int8_convrot.safetensors',
+              'minimax_h3_fl2va_pruned_fp8_scaled.safetensors',
+              'minimax_h3_fl2va_pruned_bf16.safetensors'
+            )) {
+              if ($json.Contains($foreign)) { throw "Generated manual workflow still references foreign model: $foreign" }
+            }
+          }
