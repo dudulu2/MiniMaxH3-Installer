@@ -50,7 +50,7 @@
   ],
   "runtimes": {
     "cuda126": {
-      "label": "PyTorch 2.8.0 CUDA 12.6",
+      "label": "PyTorch 2.8.0 CUDA 12.6 (legacy compatibility)",
       "torch": "2.8.0+cu126",
       "torchvision": "0.23.0+cu126",
       "torchaudio": "2.8.0+cu126",
@@ -60,13 +60,13 @@
       "minimum_driver_major": 560
     },
     "cuda130": {
-      "label": "PyTorch 2.10.0 CUDA 13.0 (RTX 50 series optimized)",
+      "label": "PyTorch 2.10.0 CUDA 13.0 (default)",
       "torch": "2.10.0+cu130",
       "torchvision": "0.25.0+cu130",
       "torchaudio": "2.10.0+cu130",
       "cuda_version": "13.0",
       "index_url": "https://download.pytorch.org/whl/cu130",
-      "mirror_index_url": "",
+      "mirror_index_url": "https://mirrors.aliyun.com/pytorch-wheels/cu130",
       "minimum_driver_major": 580
     }
   }
