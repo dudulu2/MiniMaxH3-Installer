@@ -2,8 +2,9 @@ $script:SelectedRuntimeChannel = ""
 
 function Get-RecommendedRuntimeChannel {
     param([string]$GpuName)
-    if (Test-IsBlackwellGpu $GpuName) { return "new" }
-    return "stable"
+    # PyTorch 2.10 / CUDA 13.0 is now the default runtime for all supported GPUs.
+    # CUDA 12.6 remains available as an explicit compatibility fallback.
+    return "new"
 }
 
 function Get-SelectedRuntimeChannel {
@@ -16,15 +17,15 @@ function Get-SelectedRuntimeChannel {
 function Get-RuntimeIdForGpu {
     param([string]$GpuName)
     switch (Get-SelectedRuntimeChannel -GpuName $GpuName) {
-        "new" { return "cuda130" }
-        default { return "cuda126" }
+        "stable" { return "cuda126" }
+        default { return "cuda130" }
     }
 }
 
 function Get-RuntimeChannelLabel {
     param([string]$Channel)
-    if ($Channel -eq "new") { return "New version - PyTorch 2.10 / CUDA 13.0" }
-    return "Stable version - PyTorch 2.8 / CUDA 12.6"
+    if ($Channel -eq "stable") { return "Compatibility - PyTorch 2.8 / CUDA 12.6" }
+    return "Default - PyTorch 2.10 / CUDA 13.0"
 }
 
 function Show-HardwareProfileDialog {
@@ -57,7 +58,7 @@ function Show-HardwareProfileDialog {
     $hardware = New-Object Windows.Forms.Label
     $gpuText = if ($snapshot.GpuName) { "GPU $($snapshot.GpuIndex): $($snapshot.GpuName) ($([Math]::Round($snapshot.VramMiB/1024,1)) GB VRAM)" } else { "NVIDIA GPU: not detected" }
     $ramText = if ($snapshot.RamBytes -gt 0) { "RAM: $([Math]::Round($snapshot.RamBytes/1GB,1)) GiB" } else { "RAM: unknown" }
-    $runtimeRecommendation = if ($recommendedRuntimeChannel -eq "new") { "New version (RTX 50 series preferred)" } else { "Stable version" }
+    $runtimeRecommendation = "PyTorch 2.10 / CUDA 13.0 (default for RTX 30/40/50 series)"
     $hardware.Text = "$gpuText`n$ramText`nRecommended profile: $($recommendedBase.label)`nRecommended runtime: $runtimeRecommendation"
     $hardware.Location = New-Object Drawing.Point(22, 58)
     $hardware.Size = New-Object Drawing.Size(675, 80)
@@ -108,21 +109,21 @@ function Show-HardwareProfileDialog {
     $dialog.Controls.Add($runtimeLabel)
 
     $stableRadio = New-Object Windows.Forms.RadioButton
-    $stableRadio.Text = "Stable version - PyTorch 2.8 / CUDA 12.6"
+    $stableRadio.Text = "Compatibility - PyTorch 2.8 / CUDA 12.6"
     $stableRadio.AutoSize = $true
     $stableRadio.Location = New-Object Drawing.Point(24, 316)
     $dialog.Controls.Add($stableRadio)
 
     $newRadio = New-Object Windows.Forms.RadioButton
-    $newRadio.Text = "New version - PyTorch 2.10 / CUDA 13.0 (RTX 50 series preferred)"
+    $newRadio.Text = "Default - PyTorch 2.10 / CUDA 13.0 (RTX 30/40/50 series)"
     $newRadio.AutoSize = $true
     $newRadio.Location = New-Object Drawing.Point(24, 342)
     $dialog.Controls.Add($newRadio)
 
-    if ($initialRuntimeChannel -eq "new") { $newRadio.Checked = $true } else { $stableRadio.Checked = $true }
+    if ($initialRuntimeChannel -eq "stable") { $stableRadio.Checked = $true } else { $newRadio.Checked = $true }
 
     $runtimeHint = New-Object Windows.Forms.Label
-    $runtimeHint.Text = "RTX 50-series GPUs default to New; RTX 30/40-series GPUs default to Stable. Both runtime and main model can be changed manually for testing."
+    $runtimeHint.Text = "CUDA 13.0 is selected by default on all supported RTX 30/40/50-series GPUs. Use CUDA 12.6 only as a compatibility fallback."
     $runtimeHint.Location = New-Object Drawing.Point(44, 368)
     $runtimeHint.Size = New-Object Drawing.Size(638, 36)
     $runtimeHint.ForeColor = [Drawing.Color]::FromArgb(90, 90, 90)
@@ -164,10 +165,10 @@ function Show-HardwareProfileDialog {
             $selectionMode = if ([string]$dialogState.MainModelSelection -eq "auto") { "profile default" } else { "manual override" }
 
             $runtimeWarning = ""
-            if ((Test-IsBlackwellGpu $snapshot.GpuName) -and $runtimeChannel -eq "stable") {
-                $runtimeWarning = " | New runtime is recommended for RTX 50 series."
-            } elseif (-not (Test-IsBlackwellGpu $snapshot.GpuName) -and $runtimeChannel -eq "new") {
-                $runtimeWarning = " | Manual runtime test mode; driver 580+ is recommended."
+            if ($runtimeChannel -eq "stable") {
+                $runtimeWarning = " | Compatibility fallback selected instead of the CUDA 13.0 default."
+            } elseif (-not (Test-IsBlackwellGpu $snapshot.GpuName)) {
+                $runtimeWarning = " | CUDA 13.0 is the installer default; NVIDIA driver 580+ is recommended."
             }
 
             $modelWarning = if ([string]$dialogState.MainModelSelection -eq "auto") {

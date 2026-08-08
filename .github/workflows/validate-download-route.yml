@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - feature/china-mirror-mode
+      - fix/cu130-default-downloads
   pull_request:
 
 permissions:
@@ -15,6 +16,19 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Validate modified PowerShell syntax
+        shell: powershell
+        run: |
+          foreach ($path in @('assets/local_torch_wheels.ps1', 'assets/runtime_channel_selector.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors)
+            if ($errors -and $errors.Count -gt 0) {
+              $detail = ($errors | ForEach-Object { "Line $($_.Extent.StartLineNumber): $($_.Message)" }) -join '; '
+              throw "$path did not parse in Windows PowerShell 5.1: $detail"
+            }
+          }
 
       - name: Validate Python model source ordering
         shell: pwsh
@@ -64,22 +78,42 @@ jobs:
           }
           $runtime = [PSCustomObject]@{
             label = 'test runtime'
-            index_url = 'https://download.pytorch.org/whl/cu126'
-            mirror_index_url = 'https://mirrors.aliyun.com/pytorch-wheels/cu126'
+            index_url = 'https://download.pytorch.org/whl/cu130'
+            mirror_index_url = 'https://mirrors.aliyun.com/pytorch-wheels/cu130'
           }
 
           function Test-ChinaMirrorPriority { return $true }
           Invoke-PipWithFallback 'python.exe' 'install torch' $runtime -NeedsTorchIndex
-          if ($script:CapturedArguments.Count -ne 1 -or $script:CapturedArguments[0] -notmatch 'mirrors\.aliyun\.com') {
-            throw "Mirror-first PyTorch route was not selected: $($script:CapturedArguments -join '; ')"
+          if ($script:CapturedArguments.Count -ne 1 -or $script:CapturedArguments[0] -notmatch 'mirrors\.aliyun\.com.*cu130') {
+            throw "Mirror-first CUDA 13 PyTorch route was not selected: $($script:CapturedArguments -join '; ')"
           }
 
           $script:CapturedArguments = @()
           function Test-ChinaMirrorPriority { return $false }
           Invoke-PipWithFallback 'python.exe' 'install torch' $runtime -NeedsTorchIndex
-          if ($script:CapturedArguments.Count -ne 1 -or $script:CapturedArguments[0] -notmatch 'download\.pytorch\.org') {
-            throw "Official-first PyTorch route was not selected: $($script:CapturedArguments -join '; ')"
+          if ($script:CapturedArguments.Count -ne 1 -or $script:CapturedArguments[0] -notmatch 'download\.pytorch\.org.*cu130') {
+            throw "Official-first CUDA 13 PyTorch route was not selected: $($script:CapturedArguments -join '; ')"
           }
+
+      - name: Validate CUDA 13 defaults and wheel caching
+        shell: powershell
+        run: |
+          $profiles = Get-Content -LiteralPath 'assets/install_profiles.json' -Raw | ConvertFrom-Json
+          if ($profiles.runtimes.cuda130.mirror_index_url -ne 'https://mirrors.aliyun.com/pytorch-wheels/cu130') {
+            throw 'CUDA 13 Aliyun mirror is not configured.'
+          }
+
+          $selector = Get-Content -LiteralPath 'assets/runtime_channel_selector.ps1' -Raw
+          if ($selector -notmatch 'function Get-RecommendedRuntimeChannel') { throw 'Runtime recommendation function is missing.' }
+          if ($selector -notmatch 'return "new"') { throw 'CUDA 13 is not the default runtime channel.' }
+          if ($selector -notmatch 'RTX 30/40/50') { throw 'Runtime UI does not describe the all-series CUDA 13 default.' }
+
+          $torch = Get-Content -LiteralPath 'assets/local_torch_wheels.ps1' -Raw
+          if ($torch -notmatch 'downloads\\torch-wheels') { throw 'Persistent PyTorch wheel cache is missing.' }
+          if ($torch -notmatch '\.partial') { throw 'Resumable PyTorch partial-file support is missing.' }
+          if ($torch -notmatch '--no-deps') { throw 'Local wheel installation must avoid dependency downloads.' }
+          if ($torch -notmatch 'mirrors\.aliyun\.com/pypi/simple') { throw 'Aliyun PyPI fallback is missing.' }
+          if ($torch -notmatch 'Ensure-TorchRuntimeDependencies') { throw 'Separated PyTorch dependency installation is missing.' }
 
       - name: Validate installer route propagation
         shell: powershell
