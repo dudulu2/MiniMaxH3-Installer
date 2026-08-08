@@ -7,8 +7,9 @@ Double-click `Start-Installer.bat`. The installer detects the NVIDIA GPU, VRAM, 
 - Windows 10/11 x64 with a desktop session
 - NVIDIA RTX 3060-class through RTX 5090-class GPUs
 - At least 8 GB VRAM and 16 GB system RAM for the compatibility profile
-- NVIDIA driver 560 or newer recommended for RTX 30/40 series
-- NVIDIA driver 580 or newer required for the RTX 50-series CUDA 13.0 runtime
+- PyTorch 2.10 / CUDA 13.0 is the default runtime for all supported RTX 30/40/50-series GPUs
+- NVIDIA driver 580 or newer is recommended for the CUDA 13.0 runtime
+- PyTorch 2.8 / CUDA 12.6 remains available as a manual compatibility fallback
 - Internet access during installation
 
 The installer chooses the highest-VRAM NVIDIA GPU when more than one GPU is present and writes that physical GPU index into the launcher through `CUDA_VISIBLE_DEVICES`.
@@ -25,26 +26,34 @@ The installer chooses the highest-VRAM NVIDIA GPU when more than one GPU is pres
 
 ## CUDA runtime selection
 
-- RTX 30 and RTX 40 series: PyTorch `2.8.0+cu126`, Torchvision `0.23.0+cu126`, TorchAudio `2.8.0+cu126`
-- RTX 50 series / Blackwell: PyTorch `2.10.0+cu130`, Torchvision `0.25.0+cu130`, TorchAudio `2.10.0+cu130`
+The default runtime for RTX 30, RTX 40, and RTX 50 series is:
+
+- PyTorch `2.10.0+cu130`
+- Torchvision `0.25.0+cu130`
+- TorchAudio `2.10.0+cu130`
+- CUDA runtime `13.0`
+
+PyTorch `2.8.0+cu126` / CUDA `12.6` remains selectable from **Change configuration** as a compatibility fallback.
 
 The installer verifies the exact package versions, CUDA availability, CUDA runtime version, and detected GPU before downloading the H3 models.
 
 ## Upgrade an existing installation
 
-Select the same installation directory and click **Install / Repair**. The installer preserves models, user workflows, logs, launchers, and partial model downloads. If the installed PyTorch runtime does not match the selected GPU runtime, the old Torch/Torchvision/TorchAudio packages are removed and the matching set is installed. ComfyUI requirements are then refreshed with `--upgrade --upgrade-strategy only-if-needed`, followed by `pip check` and a CUDA verification run.
+Select the same installation directory and click **Install / Repair**. The installer preserves models, user workflows, logs, launchers, PyTorch wheel cache, and partial model downloads. If the installed PyTorch runtime does not match the selected runtime, the old Torch/Torchvision/TorchAudio packages are removed and the matching set is installed. ComfyUI requirements are then refreshed with `--upgrade --upgrade-strategy only-if-needed`, followed by `pip check` and a CUDA verification run.
 
-For an existing RTX 50-series installation this upgrades the previous PyTorch 2.8 CUDA 12.8 environment to PyTorch 2.10 CUDA 13.0 without downloading the H3 models again when their verified files are already present.
+Existing RTX 30/40/50-series installations that are still on the older runtime are upgraded to PyTorch 2.10 CUDA 13.0 by default unless the CUDA 12.6 compatibility runtime is selected manually.
 
-## Local PyTorch wheels
+## Local and cached PyTorch wheels
 
-The installer searches its root and `assets` recursively for exact Python 3.10 Windows wheels matching the selected runtime. For RTX 50-series systems the optional local files are:
+The installer searches its root and `assets` recursively for exact Python 3.10 Windows wheels matching the selected runtime. For the default CUDA 13.0 runtime the optional local files are:
 
 - `torch-2.10.0+cu130-cp310-cp310-win_amd64.whl`
 - `torchvision-0.25.0+cu130-cp310-cp310-win_amd64.whl`
 - `torchaudio-2.10.0+cu130-cp310-cp310-win_amd64.whl`
 
-A local Torch wheel is used first. Missing matching Torchvision or TorchAudio wheels are downloaded individually. If no matching local Torch wheel exists, the full matching runtime is downloaded from the configured PyTorch source.
+Local wheels are used first. If a matching wheel is not bundled beside the installer, it is downloaded as a standalone file into `downloads/torch-wheels/`, kept for future repairs, and installed locally with `--no-deps`. Interrupted wheel downloads are kept as `.partial` files and resumed on the next run when the server supports HTTP range requests.
+
+The smaller PyTorch Python dependencies such as NumPy, Pillow, NetworkX, Jinja2, FSSpec, SymPy, and typing-extensions are installed separately through the normal PyPI mirror route. This prevents a fast 1.8+ GB PyTorch wheel download from becoming blocked by a slow unrelated package source.
 
 ## Installed stack
 
@@ -63,19 +72,25 @@ The launcher does not use `--lowvram`; ComfyUI uses DynamicVRAM. SeedVR2, xforme
 
 ## Download routes and safety
 
-The main installer window includes **China mainland mirror priority**. When enabled, Python uses npmmirror first, normal Python packages use the Tsinghua PyPI mirror first, CUDA 12.6 PyTorch uses the Aliyun mirror first, and MiniMax H3 models use `hf-mirror` first. Every configured official source remains the automatic fallback. CUDA 13.0 currently has no verified bundled China mirror and therefore uses the official PyTorch source unless matching local wheels are supplied.
+The main installer window includes **China mainland mirror priority**. When enabled:
 
-When the option is disabled, official sources are attempted first and mirrors remain automatic fallbacks. The selected route is locked while an installation is running and is written to the installation manifest.
+- Python runtime uses npmmirror before python.org
+- normal Python packages use Tsinghua PyPI first, Aliyun PyPI second, and official PyPI as fallback for installer-managed toolchain/PyTorch dependencies
+- CUDA 12.6 and CUDA 13.0 PyTorch wheels use the Aliyun PyTorch mirror before the official PyTorch source
+- MiniMax H3 models use `hf-mirror` before Hugging Face
 
-All official model file sizes and SHA-256 values are stored in `assets/hf_model_inventory.json`. Model downloads retain partial files, resume by HTTP range, and verify the completed file before installation continues, regardless of source order.
+When the option is disabled, official sources are attempted first and configured mirrors remain fallbacks. The selected route is locked while an installation is running and is written to the installation manifest.
+
+PyTorch wheel downloads are stored in the installation's `downloads/torch-wheels/` cache and preserve partial data for resume/fallback. Model downloads also retain partial files, resume by HTTP range, and verify completed model files against the official size and SHA-256 inventory in `assets/hf_model_inventory.json`.
 
 ## Use
 
 1. Double-click `Start-Installer.bat`.
 2. Review the detected GPU/RAM and accept `Auto`, or choose one of the three profiles.
-3. Select an installation folder and run **Check computer**.
-4. Click **Install / Repair**.
-5. After completion, use `Start MiniMax H3.bat` or the desktop shortcut.
-6. Use `Stop MiniMax H3.bat` before shutting down or moving the installation.
+3. Leave the default CUDA 13.0 runtime selected unless a compatibility fallback is needed.
+4. Select an installation folder and run **Check computer**.
+5. Click **Install / Repair**.
+6. After completion, use `Start MiniMax H3.bat` or the desktop shortcut.
+7. Use `Stop MiniMax H3.bat` before shutting down or moving the installation.
 
 The full 40–68 GiB model downloads and generation performance still require end-to-end validation on representative RTX 3060, RTX 4090, and RTX 5090 systems before this branch is treated as a final release.
