@@ -11,22 +11,22 @@ try {
     Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue
 
     $url = 'https://github.com/dudulu2/TE-minimaxH3/archive/refs/heads/main.zip'
-    Write-Host '正在下载最新 TE-Speed MiniMax H3 可选加速组件...'
+    Write-Host 'Downloading the latest optional TE-Speed MiniMax H3 package...'
     Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $zip
 
-    Write-Host '正在解压...'
+    Write-Host 'Extracting TE-Speed package...'
     Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
     $root = Get-ChildItem -LiteralPath $extract -Directory | Select-Object -First 1
-    if (-not $root) { throw 'TE-Speed 压缩包解压后没有找到项目目录。' }
+    if (-not $root) { throw 'The TE-Speed archive did not contain a project directory.' }
     $installer = Join-Path $root.FullName 'Install-TE.ps1'
-    if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw 'TE-Speed 安装脚本缺失。' }
+    if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw 'Install-TE.ps1 is missing from the downloaded TE-Speed package.' }
 
     & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -STA -File $installer
     exit $LASTEXITCODE
 } catch {
-    Write-Host ("TE-Speed 可选组件启动失败：" + $_.Exception.Message) -ForegroundColor Red
+    Write-Host ("Could not start the optional TE-Speed installer: " + $_.Exception.Message) -ForegroundColor Red
     [Windows.Forms.MessageBox]::Show(
-        "无法启动 TE-Speed 可选组件：`n`n$($_.Exception.Message)`n`n你也可以直接下载 dudulu2/TE-minimaxH3 的 ZIP。",
-        'TE-Speed 下载/启动失败', 'OK', 'Error') | Out-Null
+        "Could not start the optional TE-Speed installer.`n`n$($_.Exception.Message)`n`nYou can also download dudulu2/TE-minimaxH3 directly.",
+        'TE-Speed download/start failed', 'OK', 'Error') | Out-Null
     exit 1
 }
