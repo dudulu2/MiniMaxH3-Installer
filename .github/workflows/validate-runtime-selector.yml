@@ -34,17 +34,23 @@ jobs:
           . ./assets/runtime_channel_selector.ps1
 
           $script:SelectedRuntimeChannel = ''
-          if ((Get-RuntimeIdForGpu 'NVIDIA GeForce RTX 5090') -ne 'cuda130') { throw 'RTX 5090 must default to New/cuda130.' }
-          if ((Get-RuntimeIdForGpu 'NVIDIA GeForce RTX 5080') -ne 'cuda130') { throw 'RTX 5080 must default to New/cuda130.' }
-          if ((Get-RuntimeIdForGpu 'NVIDIA GeForce RTX 5070') -ne 'cuda130') { throw 'RTX 5070 must default to New/cuda130.' }
-          if ((Get-RuntimeIdForGpu 'NVIDIA GeForce RTX 4090') -ne 'cuda126') { throw 'RTX 4090 must default to Stable/cuda126.' }
-          if ((Get-RuntimeIdForGpu 'NVIDIA GeForce RTX 4060') -ne 'cuda126') { throw 'RTX 4060 must default to Stable/cuda126.' }
+          foreach ($gpu in @(
+            'NVIDIA GeForce RTX 5090',
+            'NVIDIA GeForce RTX 5080',
+            'NVIDIA GeForce RTX 5070',
+            'NVIDIA GeForce RTX 4090',
+            'NVIDIA GeForce RTX 4060',
+            'NVIDIA GeForce RTX 3060'
+          )) {
+            if ((Get-RuntimeIdForGpu $gpu) -ne 'cuda130') { throw "$gpu must default to CUDA 13/cuda130." }
+          }
 
           $script:SelectedRuntimeChannel = 'stable'
-          if ((Get-RuntimeIdForGpu 'NVIDIA GeForce RTX 5090') -ne 'cuda126') { throw 'Manual Stable selection was ignored.' }
+          if ((Get-RuntimeIdForGpu 'NVIDIA GeForce RTX 5090') -ne 'cuda126') { throw 'Manual CUDA 12.6 compatibility selection was ignored.' }
+          if ((Get-RuntimeIdForGpu 'NVIDIA GeForce RTX 4090') -ne 'cuda126') { throw 'Manual CUDA 12.6 compatibility selection was ignored on RTX 4090.' }
 
           $script:SelectedRuntimeChannel = 'new'
-          if ((Get-RuntimeIdForGpu 'NVIDIA GeForce RTX 4090') -ne 'cuda130') { throw 'Manual New selection was ignored.' }
+          if ((Get-RuntimeIdForGpu 'NVIDIA GeForce RTX 4090') -ne 'cuda130') { throw 'Manual CUDA 13 selection was ignored.' }
 
       - name: Verify launcher load order and labels
         shell: powershell
@@ -57,6 +63,6 @@ jobs:
           if (-not ($torch -lt $selector -and $selector -lt $workflow)) { throw 'Runtime selector must load after Torch override and before workflow override.' }
 
           $selectorText = Get-Content assets/runtime_channel_selector.ps1 -Raw
-          foreach ($needle in @('Stable version - PyTorch 2.8 / CUDA 12.6', 'New version - PyTorch 2.10 / CUDA 13.0 (RTX 50 series preferred)')) {
+          foreach ($needle in @('Compatibility - PyTorch 2.8 / CUDA 12.6', 'Default - PyTorch 2.10 / CUDA 13.0 (RTX 30/40/50 series)')) {
             if (-not $selectorText.Contains($needle)) { throw "Missing runtime option label: $needle" }
           }
