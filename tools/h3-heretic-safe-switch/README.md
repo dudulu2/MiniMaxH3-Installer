@@ -48,5 +48,3 @@
 Ultra-Heretic 能显著降低 Qwen3-VL 作为语言模型时的拒答倾向，但这不能科学保证 MiniMax H3 最终视频输出达到 100% 无任何限制。H3 主要读取 Qwen3-VL 的中间隐藏状态作为 conditioning，因此实际收益应使用同 Prompt、同 Seed 做官方 encoder / Heretic encoder A/B 测试。
 
 工具选择 INT8 ConvRot，是为了优先保持 text encoder 精度，而不是追求最低文件体积。
-
-> 目录中早期 `Enable-H3-Heretic-Encoder.ps1` / `Run-MirrorFirst.ps1` 属于旧版实现。正常使用请直接运行 `一键启用-H3-Heretic.bat`，它现在走 v2 隔离工作流逻辑。
