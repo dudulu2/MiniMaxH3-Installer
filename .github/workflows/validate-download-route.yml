@@ -17,6 +17,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate modified PowerShell syntax
+        shell: powershell
+        run: |
+          foreach ($path in @('assets/local_torch_wheels.ps1', 'assets/runtime_channel_selector.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors)
+            if ($errors -and $errors.Count -gt 0) {
+              $detail = ($errors | ForEach-Object { "Line $($_.Extent.StartLineNumber): $($_.Message)" }) -join '; '
+              throw "$path did not parse in Windows PowerShell 5.1: $detail"
+            }
+          }
+
       - name: Validate Python model source ordering
         shell: pwsh
         run: |
