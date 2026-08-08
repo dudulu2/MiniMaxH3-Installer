@@ -1,7 +1,9 @@
 function Get-RuntimeIdForGpu {
     param([string]$GpuName)
-    if (Test-IsBlackwellGpu $GpuName) { return "cuda130" }
-    return "cuda126"
+    # The runtime selector loaded after this file may override this when the user
+    # explicitly chooses the CUDA 12.6 compatibility channel. The automatic path
+    # defaults to CUDA 13.0 for every supported GPU.
+    return "cuda130"
 }
 
 function Find-LocalPythonWheel {
@@ -80,25 +82,28 @@ function Test-PythonToolchainReady {
 function Invoke-BasePyPiWithFallback {
     param([string]$Python, [string]$PackageArguments)
 
-    $preferMirror = Test-ChinaMirrorPriority
-    if ($preferMirror) {
-        $primaryArgs = "$PackageArguments --index-url https://pypi.tuna.tsinghua.edu.cn/simple"
-        $primaryLabel = "Tsinghua PyPI mirror"
-        $fallbackArgs = "$PackageArguments --index-url https://pypi.org/simple"
-        $fallbackLabel = "official PyPI"
+    if (Test-ChinaMirrorPriority) {
+        $sources = @(
+            [PSCustomObject]@{ Label="Tsinghua PyPI mirror"; Url="https://pypi.tuna.tsinghua.edu.cn/simple" },
+            [PSCustomObject]@{ Label="Aliyun PyPI mirror"; Url="https://mirrors.aliyun.com/pypi/simple" },
+            [PSCustomObject]@{ Label="official PyPI"; Url="https://pypi.org/simple" }
+        )
     } else {
-        $primaryArgs = "$PackageArguments --index-url https://pypi.org/simple"
-        $primaryLabel = "official PyPI"
-        $fallbackArgs = "$PackageArguments --index-url https://pypi.tuna.tsinghua.edu.cn/simple"
-        $fallbackLabel = "Tsinghua PyPI mirror"
+        $sources = @(
+            [PSCustomObject]@{ Label="official PyPI"; Url="https://pypi.org/simple" },
+            [PSCustomObject]@{ Label="Tsinghua PyPI mirror"; Url="https://pypi.tuna.tsinghua.edu.cn/simple" },
+            [PSCustomObject]@{ Label="Aliyun PyPI mirror"; Url="https://mirrors.aliyun.com/pypi/simple" }
+        )
     }
 
-    Add-Log "Python toolchain source: $primaryLabel"
-    $exit = Invoke-ProcessChecked $Python ("-m pip {0} --timeout 30 --retries 2 --no-cache-dir --disable-pip-version-check" -f $primaryArgs) $script:InstallerRoot -AllowFailure
-    if ($exit -ne 0) {
-        Add-Log "$primaryLabel failed; switching Python toolchain install to $fallbackLabel." "WARN"
-        $null = Invoke-ProcessChecked $Python ("-m pip {0} --timeout 30 --retries 3 --no-cache-dir --disable-pip-version-check" -f $fallbackArgs) $script:InstallerRoot
+    foreach ($source in $sources) {
+        Add-Log "Python package source: $($source.Label)"
+        $args = "-m pip $PackageArguments --index-url $($source.Url) --timeout 60 --retries 3 --disable-pip-version-check"
+        $exit = Invoke-ProcessChecked $Python $args $script:InstallerRoot -AllowFailure
+        if ($exit -eq 0) { return }
+        Add-Log "$($source.Label) failed; trying the next Python package source." "WARN"
     }
+    throw "All configured Python package sources failed."
 }
 
 function Ensure-PythonToolchain {
@@ -172,8 +177,120 @@ function Remove-OldTorchRuntime {
     $null = Invoke-ProcessChecked $Python "-m pip uninstall -y torch torchvision torchaudio" $script:InstallerRoot -AllowFailure
 }
 
+function Get-TorchWheelUrls {
+    param($Runtime, [string]$FileName)
+
+    $official = ([string]$Runtime.index_url).TrimEnd('/') + "/" + $FileName
+    $mirror = $null
+    if ($Runtime.mirror_index_url) {
+        $mirror = ([string]$Runtime.mirror_index_url).TrimEnd('/') + "/" + $FileName
+    }
+
+    if (Test-ChinaMirrorPriority) {
+        if ($mirror) { return @($mirror, $official) }
+        return @($official)
+    }
+    if ($mirror) { return @($official, $mirror) }
+    return @($official)
+}
+
+function Invoke-ResumableTorchWheelDownload {
+    param(
+        [string]$Name,
+        [string[]]$Urls,
+        [string]$Destination
+    )
+
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Destination) | Out-Null
+    if (Test-Path -LiteralPath $Destination -PathType Leaf) {
+        Add-Log "Cached PyTorch wheel found: $Destination"
+        return $Destination
+    }
+
+    $partial = $Destination + ".partial"
+    $lastError = $null
+    foreach ($url in $Urls) {
+        $client = New-HttpClient
+        $client.Timeout = [TimeSpan]::FromMinutes(10)
+        try {
+            $offset = if (Test-Path -LiteralPath $partial) { (Get-Item -LiteralPath $partial).Length } else { [int64]0 }
+            Add-Log ("Downloading {0} from {1}{2}" -f $Name, $url, $(if ($offset -gt 0) { " (resume at $([Math]::Round($offset/1MB,1)) MiB)" } else { "" }))
+
+            $request = New-Object Net.Http.HttpRequestMessage([Net.Http.HttpMethod]::Get, $url)
+            if ($offset -gt 0) {
+                $request.Headers.Range = New-Object Net.Http.Headers.RangeHeaderValue($offset, $null)
+            }
+            $response = $client.SendAsync($request, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).Result
+            if ($offset -gt 0 -and $response.StatusCode -ne [Net.HttpStatusCode]::PartialContent) {
+                Add-Log "The source did not honor the resume request; restarting this wheel from zero." "WARN"
+                $response.Dispose()
+                $request.Dispose()
+                Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
+                $offset = 0
+                $request = New-Object Net.Http.HttpRequestMessage([Net.Http.HttpMethod]::Get, $url)
+                $response = $client.SendAsync($request, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).Result
+            }
+            [void]$response.EnsureSuccessStatusCode()
+
+            $total = [int64]0
+            if ($response.Content.Headers.ContentRange -and $response.Content.Headers.ContentRange.Length) {
+                $total = [int64]$response.Content.Headers.ContentRange.Length
+            } elseif ($response.Content.Headers.ContentLength) {
+                $total = $offset + [int64]$response.Content.Headers.ContentLength
+            }
+
+            $stream = $response.Content.ReadAsStreamAsync().Result
+            $mode = if ($offset -gt 0) { [IO.FileMode]::Append } else { [IO.FileMode]::Create }
+            $file = New-Object IO.FileStream($partial, $mode, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+            try {
+                $buffer = New-Object byte[] (1MB)
+                $lastUi = [DateTime]::UtcNow
+                while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                    $file.Write($buffer, 0, $read)
+                    $offset += $read
+                    if (([DateTime]::UtcNow - $lastUi).TotalMilliseconds -ge 500) {
+                        if ($total -gt 0) {
+                            Set-Stage ("Downloading {0}: {1:N1}/{2:N1} MiB" -f $Name, ($offset/1MB), ($total/1MB)) ([int](100*$offset/$total))
+                        } else {
+                            Set-Stage ("Downloading {0}: {1:N1} MiB" -f $Name, ($offset/1MB)) -1
+                        }
+                        $lastUi = [DateTime]::UtcNow
+                    }
+                }
+            } finally {
+                if ($file) { $file.Dispose() }
+                if ($stream) { $stream.Dispose() }
+                if ($response) { $response.Dispose() }
+                if ($request) { $request.Dispose() }
+            }
+
+            if ($total -gt 0 -and (Get-Item -LiteralPath $partial).Length -ne $total) {
+                throw "Incomplete wheel download: expected $total bytes."
+            }
+            Move-Item -LiteralPath $partial -Destination $Destination -Force
+            Add-Log "$Name download completed and cached."
+            return $Destination
+        } catch {
+            $lastError = $_.Exception
+            Add-Log ("PyTorch wheel source failed; keeping partial data for retry/fallback: {0}" -f $_.Exception.Message) "WARN"
+        } finally {
+            if ($client) { $client.Dispose() }
+        }
+    }
+    throw "All PyTorch wheel sources failed for $Name. Last error: $($lastError.Message)"
+}
+
+function Ensure-TorchRuntimeDependencies {
+    param([string]$Python)
+
+    # Install the small, ordinary Python dependencies from PyPI separately so a
+    # fast Aliyun PyTorch wheel download never falls back to a slow PyPI route.
+    $deps = 'install filelock "typing-extensions>=4.10.0" "sympy>=1.13.3" "networkx>=2.5.1" jinja2 "fsspec>=0.8.5" numpy "pillow!=8.3.*,>=5.3.0"'
+    Invoke-BasePyPiWithFallback -Python $Python -PackageArguments $deps
+}
+
 function Install-SelectedTorchRuntime {
-    param([string]$Python, $Runtime)
+    param([string]$Python, $Runtime, [string]$InstallRoot)
 
     $installed = Get-InstalledTorchRuntime -Python $Python
     if (Test-TorchRuntimeMatches -Installed $installed -Runtime $Runtime) {
@@ -188,36 +305,30 @@ function Install-SelectedTorchRuntime {
         [PSCustomObject]@{ Name = "torchaudio"; Version = [string]$Runtime.torchaudio }
     )
 
-    $localWheels = @{}
+    $cacheDir = Join-Path $InstallRoot ("downloads\torch-wheels\cu{0}-py310" -f ([string]$Runtime.cuda_version).Replace('.', ''))
+    New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
+
+    $wheels = @{}
     foreach ($package in $packageSpecs) {
         $fileName = "{0}-{1}-cp310-cp310-win_amd64.whl" -f $package.Name, $package.Version
         $wheel = Find-LocalPythonWheel -FileName $fileName
         if ($wheel) {
-            $localWheels[$package.Name] = $wheel
             Add-Log ("Local wheel found for {0}: {1}" -f $package.Name, $wheel)
-        }
-    }
-
-    if (-not $localWheels.ContainsKey("torch")) {
-        Add-Log ("No matching local Torch wheel was found for {0}; using configured package sources." -f $Runtime.torch)
-        $torchPackages = "install torch==$($Runtime.torch) torchvision==$($Runtime.torchvision) torchaudio==$($Runtime.torchaudio) --upgrade"
-        $null = Invoke-PipWithFallback $Python $torchPackages $Runtime -NeedsTorchIndex
-        return
-    }
-
-    Set-Stage ("Installing local Torch wheel: {0}" -f (Split-Path -Leaf $localWheels["torch"])) -1
-    $null = Invoke-ProcessChecked $Python ("-m pip install `"{0}`" --upgrade --no-deps --disable-pip-version-check" -f $localWheels["torch"]) $script:InstallerRoot
-
-    foreach ($package in $packageSpecs | Where-Object { $_.Name -ne "torch" }) {
-        if ($localWheels.ContainsKey($package.Name)) {
-            Set-Stage ("Installing local {0} wheel" -f $package.Name) -1
-            $null = Invoke-ProcessChecked $Python ("-m pip install `"{0}`" --upgrade --no-deps --disable-pip-version-check" -f $localWheels[$package.Name]) $script:InstallerRoot
         } else {
-            Add-Log ("No matching local {0} wheel was found; downloading only {0} {1}." -f $package.Name, $package.Version)
-            $arguments = "install $($package.Name)==$($package.Version) --upgrade --no-deps"
-            $null = Invoke-PipWithFallback $Python $arguments $Runtime -NeedsTorchIndex
+            $cached = Join-Path $cacheDir $fileName
+            $urls = @(Get-TorchWheelUrls -Runtime $Runtime -FileName $fileName)
+            $wheel = Invoke-ResumableTorchWheelDownload -Name ("{0} {1}" -f $package.Name, $package.Version) -Urls $urls -Destination $cached
         }
+        $wheels[$package.Name] = $wheel
     }
+
+    foreach ($package in $packageSpecs) {
+        Set-Stage ("Installing local {0} wheel" -f $package.Name) -1
+        $null = Invoke-ProcessChecked $Python ("-m pip install `"{0}`" --upgrade --no-deps --disable-pip-version-check" -f $wheels[$package.Name]) $script:InstallerRoot
+    }
+
+    Set-Stage "Installing PyTorch Python dependencies" -1
+    Ensure-TorchRuntimeDependencies -Python $Python
 }
 
 function Install-ComfyEnvironment {
@@ -245,7 +356,7 @@ function Install-ComfyEnvironment {
     Ensure-PythonToolchain -Python $venvPython
 
     Set-Stage ("Checking {0}" -f $Runtime.label) -1
-    Install-SelectedTorchRuntime -Python $venvPython -Runtime $Runtime
+    Install-SelectedTorchRuntime -Python $venvPython -Runtime $Runtime -InstallRoot $InstallRoot
 
     $constraints = Join-Path $InstallRoot "runtime\constraints-selected.txt"
     @"
