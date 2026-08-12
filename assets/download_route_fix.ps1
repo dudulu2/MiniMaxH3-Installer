@@ -39,7 +39,12 @@ function Install-SelectedTorchRuntime {
     if (-not (Test-ChinaMirrorPriority)) {
         Set-Stage ("Installing {0} from the official PyTorch index" -f $Runtime.label) -1
         Add-Log ("PyTorch download route: official pip index {0}" -f $Runtime.index_url)
-        $packages = "torch==$($Runtime.torch) torchvision==$($Runtime.torchvision) torchaudio==$($Runtime.torchaudio)"
+        # The official PyTorch install syntax uses the base package version while
+        # the selected CUDA build is determined by the cuXXX index URL.
+        $torchVersion = ([string]$Runtime.torch -split '\+')[0]
+        $visionVersion = ([string]$Runtime.torchvision -split '\+')[0]
+        $audioVersion = ([string]$Runtime.torchaudio -split '\+')[0]
+        $packages = "torch==$torchVersion torchvision==$visionVersion torchaudio==$audioVersion"
         $args = "-m pip install $packages --upgrade --index-url $($Runtime.index_url) --timeout 1800 --retries 10 --disable-pip-version-check"
         $null = Invoke-ProcessChecked $Python $args $script:InstallerRoot
         return
