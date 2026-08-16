@@ -52,33 +52,19 @@ function Resolve-MiniMaxRoot {
     throw "Could not find the MiniMaxH3-Installer installation. Set MINIMAX_H3_ROOT to the installation folder and retry."
 }
 
-function Invoke-PythonProbe {
-    param([string]$Python, [string[]]$Arguments)
-    $oldPreference = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = "Continue"
-        $raw = @(& $Python @Arguments 2>&1)
-        $exitCode = [int]$LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $oldPreference
-    }
-    return [PSCustomObject]@{
-        ExitCode = $exitCode
-        Output = @($raw | ForEach-Object { [string]$_ })
-    }
-}
+function Invoke-PythonProbeFile {
+    param(
+        [string]$Python,
+        [string]$Root
+    )
 
-try {
-    $root = Resolve-MiniMaxRoot -RequestedRoot $TargetRoot
-    $python = Join-Path $root "runtime\venv\Scripts\python.exe"
-
-    # Only torch needs to be imported for the CUDA runtime check. Read the
-    # torchvision/torchaudio versions from installed distribution metadata so
-    # optional DLL/image/audio initialization cannot make the guard fail before
-    # we can explain the real problem.
-    $code = @'
-import json, platform, importlib.metadata as md
+    $probePath = Join-Path $Root ("runtime\plugin-minimaxh3-runtime-probe-" + [Guid]::NewGuid().ToString("N") + ".py")
+    $probeCode = @'
+import json
+import platform
+import importlib.metadata as md
 import torch
+
 
 def dist_version(name):
     try:
@@ -86,21 +72,56 @@ def dist_version(name):
     except Exception:
         return ""
 
+
 print(json.dumps({
-  "python": platform.python_version(),
-  "torch": torch.__version__,
-  "torchvision": dist_version("torchvision"),
-  "torchaudio": dist_version("torchaudio"),
-  "cuda": str(torch.version.cuda or ""),
-  "cuda_available": bool(torch.cuda.is_available())
+    "python": platform.python_version(),
+    "torch": torch.__version__,
+    "torchvision": dist_version("torchvision"),
+    "torchaudio": dist_version("torchaudio"),
+    "cuda": str(torch.version.cuda or ""),
+    "cuda_available": bool(torch.cuda.is_available()),
 }))
 '@
-    $probe = Invoke-PythonProbe -Python $python -Arguments @("-c", $code)
+
+    try {
+        # PowerShell 5.1 can corrupt embedded quotes/newlines when a multiline
+        # Python program is passed through native `python -c`. Write a temporary
+        # .py file instead so Python receives the probe byte-for-byte.
+        [IO.File]::WriteAllText($probePath, $probeCode, (New-Object Text.UTF8Encoding($false)))
+
+        $oldPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            $raw = @(& $Python $probePath 2>&1)
+            $exitCode = [int]$LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $oldPreference
+        }
+
+        return [PSCustomObject]@{
+            ExitCode = $exitCode
+            Output = @($raw | ForEach-Object { [string]$_ })
+        }
+    } finally {
+        Remove-Item -LiteralPath $probePath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+try {
+    $root = Resolve-MiniMaxRoot -RequestedRoot $TargetRoot
+    $python = Join-Path $root "runtime\venv\Scripts\python.exe"
+
+    # Only torch is imported for the CUDA runtime check. torchvision and
+    # torchaudio versions are read from distribution metadata so their optional
+    # DLL/image/audio initialization cannot hide the real runtime state.
+    $probe = Invoke-PythonProbeFile -Python $python -Root $root
     if ($probe.ExitCode -ne 0) {
         $details = @($probe.Output | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        $tail = if ($details.Count -gt 8) { @($details | Select-Object -Last 8) } else { $details }
+        $tail = if ($details.Count -gt 12) { @($details | Select-Object -Last 12) } else { $details }
         $detailText = ($tail -join " | ").Trim()
-        if ([string]::IsNullOrWhiteSpace($detailText)) { $detailText = "Python exited with code $($probe.ExitCode) and produced no diagnostic output." }
+        if ([string]::IsNullOrWhiteSpace($detailText)) {
+            $detailText = "Python exited with code $($probe.ExitCode) and produced no diagnostic output."
+        }
         throw "Could not inspect the installed Python/PyTorch runtime. Python error: $detailText"
     }
 
