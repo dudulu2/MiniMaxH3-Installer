@@ -146,15 +146,29 @@ function Download-ValidatedWheel($Spec, [string]$Root) {
 }
 
 function Get-DistributionVersion([string]$Python, [string]$Distribution, [string]$Root) {
-    $code = "import importlib.metadata as m; print(m.version('" + $Distribution.Replace("'", "") + "'))"
+    # Missing Triton/Sage is the normal first-install state. Do not use
+    # importlib.metadata.version(), because PackageNotFoundError can become
+    # a terminating NativeCommandError under Windows PowerShell 5.1.
+    $safeName = $Distribution.Replace("'", "")
+    $code = "import importlib.metadata as m; n='" + $safeName + "'.lower().replace('_','-'); print(next((d.version for d in m.distributions() if ((d.metadata.get('Name') or '').lower().replace('_','-') == n)), ''))"
     Push-Location $Root
+    $oldPreference = $ErrorActionPreference
     try {
-        $out = @(& $Python -c $code 2>$null)
-        if ($LASTEXITCODE -ne 0) { return $null }
-        return ([string]($out | Select-Object -Last 1)).Trim()
-    } finally { Pop-Location }
+        $ErrorActionPreference = "Continue"
+        $out = @(& $Python -c $code 2>&1)
+        $exitCode = [int]$LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $oldPreference
+        Pop-Location
+    }
+    if ($exitCode -ne 0) {
+        $details = (@($out | ForEach-Object { [string]$_ }) -join " | ").Trim()
+        throw "Could not inspect installed distribution '$Distribution'. Python output: $details"
+    }
+    $value = ([string]($out | Select-Object -Last 1)).Trim()
+    if ([string]::IsNullOrWhiteSpace($value)) { return $null }
+    return $value
 }
-
 function Install-ExactNoDeps([string]$Python, [string]$Distribution, $Spec, [string]$Root) {
     $current = Get-DistributionVersion $Python $Distribution $Root
     if ($current) {

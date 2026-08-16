@@ -1,69 +1,74 @@
-{
-  "schema_version": 3,
-  "target": {
-    "python": "3.10.11",
-    "python_tag": "cp310",
-    "torch": "2.10.0+cu130",
-    "torchvision": "0.25.0+cu130",
-    "torchaudio": "2.10.0+cu130",
-    "cuda_prefix": "13.0",
-    "comfyui_commit": "0764232429b8cfb10b79b6f186c8cb23e0b22897",
-    "frontend": "1.47.12",
-    "workflow_templates": "0.11.27",
-    "embedded_docs": "0.5.9",
-    "comfy_kitchen": "0.2.26",
-    "comfy_aimdo": "0.4.11"
-  },
-  "source": {
-    "mode": "bundled_resource",
-    "resource": "resources/plugins-source.zip",
-    "archive_root": "plugins",
-    "size": 9420114,
-    "snapshot_provenance": {
-      "repository": "dudulu2/MiniMax-H3-OneClick",
-      "commit": "2f6e2b4ae45852d2f8355bfea338e1ab80676964",
-      "note": "Build-time provenance only. The released plugin installer never downloads or executes the OneClick installer/runtime."
-    }
-  },
-  "managed_plugins": [
-    "comfyui_essentials",
-    "comfyui-crystools",
-    "comfyui-custom-scripts",
-    "comfyui-manager",
-    "comfyui-VideoHelperSuite",
-    "rgthree-comfy",
-    "comfyui-minimax-h3-audio-T8",
-    "comfyui-minimax-h3-blockcache-T8",
-    "ComfyUI-MiniMaxH3-AVCache-CN"
-  ],
-  "validated_acceleration": {
-    "te_speed": {
-      "enabled_by_default": true,
-      "plugin": "TE-Speed-MiniMaxH3-OSS",
-      "patch_version": 3,
-      "requires_core_patch": true
-    },
-    "sageattention": {
-      "enabled_by_default": true,
-      "plugin": "SageAttention-MiniMaxH3-Safe",
-      "triton_windows": {
-        "version": "3.6.0.post25",
-        "filename": "triton_windows-3.6.0.post25-cp310-cp310-win_amd64.whl",
-        "size": 47380144,
-        "sha256": "8c45b7f83eecb71c3aeded1da7914af0050bddda710f47a2cfae936d55fae0ca",
-        "url": "https://files.pythonhosted.org/packages/ba/ca/6d38c374a427a360dc4c7687f15fdb217dd4ca3bf87d0ad31f9818e22188/triton_windows-3.6.0.post25-cp310-cp310-win_amd64.whl"
-      },
-      "sageattention": {
-        "version": "2.2.0+cu130torch2.10.0andhigher.post6",
-        "filename": "sageattention-2.2.0+cu130torch2.10.0andhigher.post6-cp310-abi3-win_amd64.whl",
-        "size": 16656067,
-        "sha256": "1635283f5c01ec3cda58a784d0d7eabbcaffaf9511d1b263db4750e1ed7958bb",
-        "url": "https://github.com/woct0rdho/SageAttention/releases/download/v2.2.0-windows.post6/sageattention-2.2.0%2Bcu130torch2.10.0andhigher.post6-cp310-abi3-win_amd64.whl"
-      },
-      "install_policy": "Install exact validated wheels with --no-deps so torch/torchvision/torchaudio cannot be replaced."
-    }
-  },
-  "excluded_plugins": {
-    "minimax_h3_workflow_autoload": "Owned by MiniMaxH3-Installer Step 1; do not overwrite its generated workflow autoload state."
-  }
+﻿{
+    "schema_version":  3,
+    "target":  {
+                   "python":  "3.10.11",
+                   "python_tag":  "cp310",
+                   "torch":  "2.10.0+cu130",
+                   "torchvision":  "0.25.0+cu130",
+                   "torchaudio":  "2.10.0+cu130",
+                   "cuda_prefix":  "13.0",
+                   "comfyui_commit":  "0764232429b8cfb10b79b6f186c8cb23e0b22897",
+                   "frontend":  "1.47.12",
+                   "workflow_templates":  "0.11.27",
+                   "embedded_docs":  "0.5.9",
+                   "comfy_kitchen":  "0.2.26",
+                   "comfy_aimdo":  "0.4.11"
+               },
+    "source":  {
+                   "mode":  "bundled_resource",
+                   "resource":  "resources/plugins-source.zip",
+                   "archive_root":  "plugins",
+                   "size":  11474922,
+                   "snapshot_provenance":  {
+                                               "repository":  "dudulu2/MiniMax-H3-OneClick",
+                                               "commit":  "2f6e2b4ae45852d2f8355bfea338e1ab80676964",
+                                               "note":  "Build-time provenance only. The released plugin installer never downloads or executes the OneClick installer/runtime."
+                                           },
+                   "manager_provenance":  {
+                                              "repository":  "Comfy-Org/ComfyUI-Manager",
+                                              "commit":  "fe1193c0c8168904e32d814190ba7f2ba2ad7581",
+                                              "aligned_with":  "ComfyUI v0.30.1 / 2026-08-03"
+                                          }
+               },
+    "managed_plugins":  [
+                            "comfyui_essentials",
+                            "comfyui-crystools",
+                            "comfyui-custom-scripts",
+                            "comfyui-manager",
+                            "comfyui-VideoHelperSuite",
+                            "rgthree-comfy",
+                            "comfyui-minimax-h3-audio-T8",
+                            "comfyui-minimax-h3-blockcache-T8",
+                            "ComfyUI-MiniMaxH3-AVCache-CN"
+                        ],
+    "validated_acceleration":  {
+                                   "te_speed":  {
+                                                    "enabled_by_default":  true,
+                                                    "plugin":  "TE-Speed-MiniMaxH3-OSS",
+                                                    "patch_version":  3,
+                                                    "requires_core_patch":  true
+                                                },
+                                   "sageattention":  {
+                                                         "enabled_by_default":  true,
+                                                         "plugin":  "SageAttention-MiniMaxH3-Safe",
+                                                         "triton_windows":  {
+                                                                                "version":  "3.6.0.post25",
+                                                                                "filename":  "triton_windows-3.6.0.post25-cp310-cp310-win_amd64.whl",
+                                                                                "size":  47380144,
+                                                                                "sha256":  "8c45b7f83eecb71c3aeded1da7914af0050bddda710f47a2cfae936d55fae0ca",
+                                                                                "url":  "https://files.pythonhosted.org/packages/ba/ca/6d38c374a427a360dc4c7687f15fdb217dd4ca3bf87d0ad31f9818e22188/triton_windows-3.6.0.post25-cp310-cp310-win_amd64.whl"
+                                                                            },
+                                                         "sageattention":  {
+                                                                               "version":  "2.2.0+cu130torch2.10.0andhigher.post6",
+                                                                               "filename":  "sageattention-2.2.0+cu130torch2.10.0andhigher.post6-cp310-abi3-win_amd64.whl",
+                                                                               "size":  16656067,
+                                                                               "sha256":  "1635283f5c01ec3cda58a784d0d7eabbcaffaf9511d1b263db4750e1ed7958bb",
+                                                                               "url":  "https://github.com/woct0rdho/SageAttention/releases/download/v2.2.0-windows.post6/sageattention-2.2.0%2Bcu130torch2.10.0andhigher.post6-cp310-abi3-win_amd64.whl"
+                                                                           },
+                                                         "install_policy":  "Install exact validated wheels with --no-deps so torch/torchvision/torchaudio cannot be replaced."
+                                                     }
+                               },
+    "excluded_plugins":  {
+                             "minimax_h3_workflow_autoload":  "Owned by MiniMaxH3-Installer Step 1; do not overwrite its generated workflow autoload state."
+                         }
 }
