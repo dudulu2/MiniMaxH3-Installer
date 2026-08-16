@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "target": {
+    "python": "3.10.11",
+    "python_tag": "cp310",
+    "torch": "2.10.0+cu130",
+    "torchvision": "0.25.0+cu130",
+    "torchaudio": "2.10.0+cu130",
+    "cuda_prefix": "13.0",
+    "comfyui_commit": "0764232429b8cfb10b79b6f186c8cb23e0b22897",
+    "frontend": "1.47.12",
+    "workflow_templates": "0.11.27",
+    "embedded_docs": "0.5.9",
+    "comfy_kitchen": "0.2.26",
+    "comfy_aimdo": "0.4.11"
+  },
+  "source": {
+    "repository": "dudulu2/MiniMax-H3-OneClick",
+    "commit": "2f6e2b4ae45852d2f8355bfea338e1ab80676964",
+    "archive_url": "https://github.com/dudulu2/MiniMax-H3-OneClick/archive/2f6e2b4ae45852d2f8355bfea338e1ab80676964.zip",
+    "subdirectory": "step2-plugin-pack"
+  },
+  "managed_plugins": [
+    "comfyui_essentials",
+    "comfyui-crystools",
+    "comfyui-custom-scripts",
+    "comfyui-manager",
+    "comfyui-VideoHelperSuite",
+    "rgthree-comfy",
+    "comfyui-minimax-h3-audio-T8",
+    "comfyui-minimax-h3-blockcache-T8",
+    "ComfyUI-MiniMaxH3-AVCache-CN"
+  ],
+  "excluded_plugins": {
+    "minimax_h3_workflow_autoload": "Owned by MiniMaxH3-Installer Step 1; do not overwrite its generated workflow autoload state.",
+    "TE-Speed-MiniMaxH3-OSS": "Not enabled by default because the fixed target H3 core does not expose the block_loop hooks used by this optimization.",
+    "SageAttention-MiniMaxH3-Safe": "Deferred until a cp310 / Torch 2.10 / CUDA 13 Triton+Sage runtime is separately validated. The base runtime must never be upgraded for this plugin."
+  }
+}
