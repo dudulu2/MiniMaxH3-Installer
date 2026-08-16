@@ -100,13 +100,12 @@ function Test-ValidatedWheel([string]$Path, $Spec) {
 }
 
 function Find-LocalWheel($Spec, [string]$Root) {
-    $dirs = @(
+    foreach ($dir in @(
         (Join-Path $scriptRoot "wheels\acceleration"),
         (Join-Path $scriptRoot "wheels"),
         (Join-Path $Root "downloads\sageattention-safe"),
         (Join-Path $Root "downloads\plugin-minimaxh3")
-    )
-    foreach ($dir in $dirs) {
+    )) {
         if (-not (Test-Path -LiteralPath $dir -PathType Container)) { continue }
         $candidate = Join-Path $dir ([string]$Spec.filename)
         if (Test-ValidatedWheel $candidate $Spec) { return $candidate }
@@ -167,35 +166,37 @@ function Install-ExactNoDeps([string]$Python, [string]$Distribution, $Spec, [str
     }
     $wheel = Find-LocalWheel $Spec $Root
     if (-not $wheel) { $wheel = Download-ValidatedWheel $Spec $Root }
-    Write-Log "Installing $Distribution $($Spec.version) from validated local wheel with --no-deps."
+    Write-Log "Installing $Distribution $($Spec.version) from validated wheel with --no-deps."
     $null = Invoke-Native $Python @("-m","pip","install","--no-deps","--no-index","--disable-pip-version-check",$wheel) $Root
     $after = Get-DistributionVersion $Python $Distribution $Root
     if ($after -ne [string]$Spec.version) { throw "$Distribution version verification failed; expected $($Spec.version), found '$after'." }
 }
 
-function Get-PinnedSourceArchive([string]$Root) {
-    $commit = [string]$manifest.source.commit
-    $file = Join-Path $Root ("downloads\plugin-minimaxh3\MiniMax-H3-OneClick-" + $commit + ".zip")
-    if (Test-Path -LiteralPath $file -PathType Leaf) { return $file }
-    $local = Join-Path $scriptRoot "plugin-source.zip"
-    if (Test-Path -LiteralPath $local -PathType Leaf) { return $local }
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $file) | Out-Null
-    $partial = $file + ".partial"
-    Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
-    Write-Log "Pinned plugin source archive is not cached; downloading commit $commit." "WARN"
-    Invoke-WebRequest -UseBasicParsing -Uri ([string]$manifest.source.archive_url) -OutFile $partial -TimeoutSec 180
-    Move-Item -LiteralPath $partial -Destination $file -Force
-    return $file
+function Get-BundledSourceArchive {
+    $source = $manifest.source
+    if ([string]$source.mode -ne "bundled_resource") { throw "Unsupported plugin source mode: $($source.mode)" }
+    $archive = Join-Path $scriptRoot ([string]$source.resource)
+    if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
+        throw "Bundled plugin source resource is missing: $archive. Re-download the complete plugin-minimaxh3 package."
+    }
+    $item = Get-Item -LiteralPath $archive
+    if ($source.PSObject.Properties.Name -contains "size") {
+        if ([int64]$item.Length -ne [int64]$source.size) {
+            throw "Bundled plugin source resource size is invalid: $($item.Length) bytes; expected $($source.size)."
+        }
+    }
+    Write-Log "Using bundled acceleration/plugin source resource: $archive ($([Math]::Round($item.Length / 1MB, 2)) MiB)."
+    return $archive
 }
 
-function Expand-PinnedSource([string]$Archive, [string]$StageRoot) {
+function Expand-BundledSource([string]$Archive, [string]$StageRoot) {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     [IO.Compression.ZipFile]::ExtractToDirectory($Archive, $StageRoot)
-    $dir = Get-ChildItem -LiteralPath $StageRoot -Directory -Recurse -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -eq ([string]$manifest.source.subdirectory) } |
-        Select-Object -First 1
-    if (-not $dir) { throw "Pinned source archive does not contain $($manifest.source.subdirectory)." }
-    return $dir.FullName
+    $dir = Join-Path $StageRoot ([string]$manifest.source.archive_root)
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
+        throw "Bundled plugin source resource does not contain root '$($manifest.source.archive_root)'."
+    }
+    return $dir
 }
 
 function Backup-And-CopyNode([string]$Source, [string]$Destination, [string]$BackupRoot) {
@@ -255,16 +256,16 @@ try {
     Assert-ComfyStopped $root
     Assert-Runtime $root
 
-    $archive = Get-PinnedSourceArchive $root
+    $archive = Get-BundledSourceArchive
     New-Item -ItemType Directory -Force -Path $stage | Out-Null
-    $sourceRoot = Expand-PinnedSource $archive $stage
+    $sourceRoot = Expand-BundledSource $archive $stage
     $teSource = Join-Path $sourceRoot "TE-Speed-MiniMaxH3-OSS"
     $sageSource = Join-Path $sourceRoot "SageAttention-MiniMaxH3-Safe"
     $tePatch = Join-Path $teSource "patch_model.py"
     $teWorkflow = Join-Path $teSource "tespeed_workflow_patch.py"
 
-    if (-not (Test-Path -LiteralPath $tePatch -PathType Leaf)) { throw "Validated TE-Speed V3 patch_model.py is missing from pinned source." }
-    if (-not (Test-Path -LiteralPath $teWorkflow -PathType Leaf)) { throw "Validated TE-Speed workflow patcher is missing from pinned source." }
+    if (-not (Test-Path -LiteralPath $tePatch -PathType Leaf)) { throw "Validated TE-Speed V3 patch_model.py is missing from bundled source." }
+    if (-not (Test-Path -LiteralPath $teWorkflow -PathType Leaf)) { throw "Validated TE-Speed workflow patcher is missing from bundled source." }
 
     Write-Log "Running TE-Speed V3 core preflight before modifying anything."
     $null = Invoke-Native $python @($tePatch,"--preflight","--comfy-ui",$comfy) $root
@@ -284,31 +285,42 @@ try {
         Write-Log "Applying validated TE-Speed safe workflow wiring to current H3 workflows."
         $workflowCode = Invoke-Native $python @($teWorkflow,"--add",$workflows) $root -AllowFailure
         if ($workflowCode -ne 0) {
-            Write-Log "TE-Speed workflow patcher reported one or more ambiguous workflows. Core patch and node remain installed; ambiguous workflows were left untouched." "WARN"
+            Write-Log "TE-Speed workflow patcher left one or more ambiguous workflows untouched." "WARN"
         }
+    } else {
+        Write-Log "Workflow directory not found; TE-Speed core/node installed without workflow wiring." "WARN"
     }
 
+    Assert-Runtime $root
+    Write-Log "Running real CUDA SageAttention FP16/BF16 smoke test."
     Invoke-SageSmoke $python $root
     Assert-Runtime $root
 
     $state = [ordered]@{
         installed_at = (Get-Date).ToString("o")
-        target_root = $root
-        te_speed = [ordered]@{ plugin="TE-Speed-MiniMaxH3-OSS"; patch_version=3 }
-        sage = [ordered]@{
+        te_speed = [ordered]@{ plugin = "TE-Speed-MiniMaxH3-OSS"; patch_version = 3 }
+        sageattention = [ordered]@{
             plugin = "SageAttention-MiniMaxH3-Safe"
             triton_windows = [string]$accel.sageattention.triton_windows.version
             sageattention = [string]$accel.sageattention.sageattention.version
         }
-        source_commit = [string]$manifest.source.commit
+        source_mode = [string]$manifest.source.mode
+        source_resource = [string]$manifest.source.resource
+        backup = $backup
         log = $script:LogPath
     }
     $state | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $root "runtime\plugin-minimaxh3-acceleration.json") -Encoding UTF8
-    Write-Log "Validated TE-Speed + Sage acceleration installed successfully."
+
+    Write-Log "Validated TE-Speed + Sage acceleration installation completed successfully."
+    Write-Host ""
+    Write-Host "TE-Speed + Sage acceleration installation complete." -ForegroundColor Green
+    Write-Host "Log: $script:LogPath"
     exit 0
 } catch {
     Write-Log $_.Exception.Message "ERROR"
-    Write-Host "Acceleration installation failed: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host ""
+    Write-Host ("Acceleration installation failed: " + $_.Exception.Message) -ForegroundColor Red
+    Write-Host "Log: $script:LogPath"
     exit 1
 } finally {
     Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
