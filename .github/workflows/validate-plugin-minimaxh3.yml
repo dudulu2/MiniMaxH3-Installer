@@ -1,0 +1,86 @@
+name: Validate plugin-minimaxh3
+
+on:
+  pull_request:
+  push:
+    branches: [plugin-minimaxh3-current]
+
+permissions:
+  contents: read
+
+jobs:
+  validate-current-runtime-plugin-pack:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse PowerShell entry points
+        shell: powershell
+        run: |
+          foreach ($path in @(
+            'plugin-minimaxh3/Check-Runtime.ps1',
+            'plugin-minimaxh3/Install-Plugins.ps1'
+          )) {
+            $tokens = $null
+            $errors = $null
+            [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Error
+              exit 1
+            }
+          }
+
+      - name: Match plugin target to installer CUDA13 runtime
+        shell: powershell
+        run: |
+          $installer = Get-Content 'assets/install_profiles.json' -Raw | ConvertFrom-Json
+          $plugin = Get-Content 'plugin-minimaxh3/plugin-manifest.json' -Raw | ConvertFrom-Json
+          $cuda130 = $installer.runtimes.cuda130
+
+          if ([string]$plugin.target.python -ne '3.10.11') { throw 'plugin-minimaxh3 must target Python 3.10.11.' }
+          if ([string]$plugin.target.python_tag -ne 'cp310') { throw 'plugin-minimaxh3 must target cp310.' }
+          if ([string]$plugin.target.torch -ne [string]$cuda130.torch) { throw 'Torch target drifted from installer cuda130.' }
+          if ([string]$plugin.target.torchvision -ne [string]$cuda130.torchvision) { throw 'torchvision target drifted from installer cuda130.' }
+          if ([string]$plugin.target.torchaudio -ne [string]$cuda130.torchaudio) { throw 'torchaudio target drifted from installer cuda130.' }
+          if ([string]$plugin.target.cuda_prefix -ne [string]$cuda130.cuda_version) { throw 'CUDA target drifted from installer cuda130.' }
+          if ([string]$plugin.target.comfyui_commit -ne '0764232429b8cfb10b79b6f186c8cb23e0b22897') { throw 'Unexpected ComfyUI target commit.' }
+
+      - name: Validate current-runtime-first policy
+        shell: powershell
+        run: |
+          $manifest = Get-Content 'plugin-minimaxh3/plugin-manifest.json' -Raw | ConvertFrom-Json
+          $managed = @($manifest.managed_plugins)
+          foreach ($required in @(
+            'comfyui_essentials',
+            'comfyui-crystools',
+            'comfyui-custom-scripts',
+            'comfyui-manager',
+            'comfyui-VideoHelperSuite',
+            'rgthree-comfy',
+            'comfyui-minimax-h3-audio-T8',
+            'comfyui-minimax-h3-blockcache-T8',
+            'ComfyUI-MiniMaxH3-AVCache-CN'
+          )) {
+            if ($required -notin $managed) { throw "Managed plugin missing: $required" }
+          }
+          foreach ($forbidden in @('minimax_h3_workflow_autoload','TE-Speed-MiniMaxH3-OSS','SageAttention-MiniMaxH3-Safe')) {
+            if ($forbidden -in $managed) { throw "Current-runtime profile must not auto-install: $forbidden" }
+          }
+
+          foreach ($path in @('plugin-minimaxh3/Check-Runtime.ps1','plugin-minimaxh3/Install-Plugins.ps1')) {
+            $text = Get-Content $path -Raw
+            if ($text.Contains('2.12.0+cu130')) { throw "$path still contains the OneClick Torch 2.12 target." }
+            if ($text.Contains('3.13.9')) { throw "$path still contains the OneClick Python 3.13 target." }
+          }
+
+          $installerText = Get-Content 'plugin-minimaxh3/Install-Plugins.ps1' -Raw
+          foreach ($needle in @(
+            'wheels\\dependencies',
+            '--no-index',
+            '--find-links',
+            'Assert-Runtime -Root $root',
+            'plugin-backups\\plugin-minimaxh3-',
+            'pip", "check"'
+          )) {
+            if (-not $installerText.Contains($needle.Replace('\\','\'))) { throw "Installer safety contract missing: $needle" }
+          }
