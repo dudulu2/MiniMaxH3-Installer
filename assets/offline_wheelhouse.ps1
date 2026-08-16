@@ -3,7 +3,7 @@
 # Offline-first dependency layer for the stable MiniMax H3 installer.
 # This file intentionally does not change Python / PyTorch / CUDA / ComfyUI versions.
 # It only changes source priority:
-#   local installer + local wheelhouse -> configured network mirrors -> official sources.
+#   local portable Python + local wheelhouse -> configured network mirrors -> official sources.
 
 function Get-LocalWheelhouseDirectories {
     $candidates = @(
@@ -140,15 +140,76 @@ function Invoke-PipWithFallback {
     $null = Invoke-ProcessChecked $Python ("-m pip {0} --timeout 30 --retries 3 --no-cache-dir --disable-pip-version-check" -f $fallbackArgs) $script:InstallerRoot
 }
 
-# Override the Python installer step so a pre-downloaded python-3.10.11-amd64.exe
-# is used before any network request.
+function Install-PythonFromNuGetPackage {
+    param(
+        [string]$PackagePath,
+        [string]$PythonRoot,
+        [string]$InstallRoot
+    )
+
+    if (-not (Test-Path -LiteralPath $PackagePath -PathType Leaf)) {
+        throw "Portable Python package is missing: $PackagePath"
+    }
+
+    $runtimeRoot = Split-Path -Parent $PythonRoot
+    New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
+    $staging = Join-Path $runtimeRoot ("python-nuget-staging-" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $staging | Out-Null
+
+    try {
+        Set-Stage "Extracting portable Python 3.10.11 runtime" -1
+        Add-Log "Portable Python package: $PackagePath"
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::ExtractToDirectory($PackagePath, $staging)
+
+        $toolsRoot = Join-Path $staging "tools"
+        $stagedPython = Join-Path $toolsRoot "python.exe"
+        if (-not (Test-Path -LiteralPath $stagedPython -PathType Leaf)) {
+            throw "The NuGet package did not contain tools\python.exe."
+        }
+
+        if (Test-Path -LiteralPath $PythonRoot) {
+            Remove-Item -LiteralPath $PythonRoot -Recurse -Force
+        }
+        Move-Item -LiteralPath $toolsRoot -Destination $PythonRoot
+    } finally {
+        Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    $python = Join-Path $PythonRoot "python.exe"
+    if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
+        throw "Portable Python extraction did not create $python"
+    }
+
+    $version = (& $python -c "import sys; print('.'.join(map(str, sys.version_info[:3])))" 2>$null | Select-Object -Last 1)
+    if ($LASTEXITCODE -ne 0 -or $version -ne "3.10.11") {
+        throw "Portable Python runtime version check failed. Expected 3.10.11, got '$version'."
+    }
+
+    $signature = Get-AuthenticodeSignature -LiteralPath $python
+    if ($signature.Status -ne [Management.Automation.SignatureStatus]::Valid -or -not $signature.SignerCertificate.Subject.Contains("Python Software Foundation")) {
+        throw "Portable python.exe signature is not valid. Status: $($signature.Status)"
+    }
+
+    $featureCheck = (& $python -c "import venv, ensurepip; print('portable-runtime-ok')" 2>$null | Select-Object -Last 1)
+    if ($LASTEXITCODE -ne 0 -or $featureCheck -ne "portable-runtime-ok") {
+        throw "Portable Python runtime is missing venv/ensurepip support."
+    }
+
+    Add-Log "Portable Python 3.10.11 runtime extracted successfully; no Windows Python installation was registered."
+    return $python
+}
+
+# Use the official CPython NuGet runtime as the primary private runtime.
+# Unlike python.org's registered EXE installer, this package can coexist with
+# another Python 3.10.11 installation and does not create an Apps & Features entry.
 function Install-PythonRuntime {
     param([string]$InstallRoot)
 
     $pythonRoot = Join-Path $InstallRoot "runtime\python"
     $python = Join-Path $pythonRoot "python.exe"
     if (Test-Path -LiteralPath $python) {
-        $version = (& $python -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null)
+        $version = (& $python -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null | Select-Object -Last 1)
         if ($version -eq "3.10") {
             Add-Log "Existing private Python 3.10 runtime found."
             return $python
@@ -156,41 +217,50 @@ function Install-PythonRuntime {
         throw "The private Python runtime exists but is not Python 3.10: $python"
     }
 
-    $installerName = "python-3.10.11-amd64.exe"
-    $localInstaller = Find-LocalInstallerAsset -FileName $installerName
-    if ($localInstaller) {
-        $installer = $localInstaller
-        Add-Log "Local Python installer found: $installer"
-        Set-Stage "Using local Python 3.10.11 installer" -1
-    } else {
-        $cache = Join-Path $InstallRoot "downloads"
-        $installer = Join-Path $cache $installerName
-        Set-Stage "Downloading Python 3.10 runtime" -1
-        $mirrorFirst = Test-ChinaMirrorPriority
-        $pythonUrls = if ($mirrorFirst) {
-            @(
-                "https://registry.npmmirror.com/-/binary/python/3.10.11/python-3.10.11-amd64.exe",
-                "https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe"
-            )
-        } else {
-            @(
-                "https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe",
-                "https://registry.npmmirror.com/-/binary/python/3.10.11/python-3.10.11-amd64.exe"
-            )
-        }
-        Add-Log "Local Python installer not found; using network fallback." "WARN"
-        $null = Invoke-SimpleDownload "Python 3.10.11" $pythonUrls $installer
+    $packageName = "python.3.10.11.nupkg"
+    $localPackage = Find-LocalInstallerAsset -FileName $packageName
+    if ($localPackage) {
+        Add-Log "Local portable Python package found: $localPackage"
+        return (Install-PythonFromNuGetPackage -PackagePath $localPackage -PythonRoot $pythonRoot -InstallRoot $InstallRoot)
     }
 
+    $cache = Join-Path $InstallRoot "downloads"
+    New-Item -ItemType Directory -Force -Path $cache | Out-Null
+    $package = Join-Path $cache $packageName
+    Set-Stage "Downloading portable Python 3.10.11 runtime" -1
+    Add-Log "Local portable Python package not found; trying official NuGet package." "WARN"
+
+    try {
+        $null = Invoke-SimpleDownload "portable Python 3.10.11" @(
+            "https://api.nuget.org/v3-flatcontainer/python/3.10.11/python.3.10.11.nupkg",
+            "https://www.nuget.org/api/v2/package/python/3.10.11"
+        ) $package
+        return (Install-PythonFromNuGetPackage -PackagePath $package -PythonRoot $pythonRoot -InstallRoot $InstallRoot)
+    } catch {
+        Add-Log ("Portable Python package path failed: {0}" -f $_.Exception.Message) "WARN"
+    }
+
+    # Compatibility fallback for older offline bundles that only contain the
+    # python.org EXE. This can fail when the same Python version is already
+    # registered on Windows, which is why NuGet is preferred above.
+    $installerName = "python-3.10.11-amd64.exe"
+    $localInstaller = Find-LocalInstallerAsset -FileName $installerName
+    if (-not $localInstaller) {
+        throw "Portable Python package was unavailable, and no local $installerName fallback was found."
+    }
+
+    $installer = $localInstaller
+    Add-Log "Falling back to registered Python EXE installer: $installer" "WARN"
     $signature = Get-AuthenticodeSignature -LiteralPath $installer
     if ($signature.Status -ne [Management.Automation.SignatureStatus]::Valid -or -not $signature.SignerCertificate.Subject.Contains("Python Software Foundation")) {
         throw "The Python installer signature is not valid. File was not executed. Status: $($signature.Status)"
     }
-    Add-Log "Python installer signature verified: $($signature.SignerCertificate.Subject)"
 
-    Set-Stage "Installing private Python runtime" -1
+    Set-Stage "Installing Python 3.10.11 compatibility fallback" -1
     $arguments = "/quiet InstallAllUsers=0 Include_launcher=0 Include_test=0 Include_doc=0 AssociateFiles=0 Shortcuts=0 PrependPath=0 Include_pip=1 TargetDir=`"$pythonRoot`""
     $null = Invoke-ProcessChecked $installer $arguments $InstallRoot
-    if (-not (Test-Path -LiteralPath $python)) { throw "Python installation did not create $python" }
+    if (-not (Test-Path -LiteralPath $python)) {
+        throw "The registered Python EXE installer did not create $python. This usually means another Python 3.10.11 installation is already registered. Add python.3.10.11.nupkg beside the installer and retry."
+    }
     return $python
 }
