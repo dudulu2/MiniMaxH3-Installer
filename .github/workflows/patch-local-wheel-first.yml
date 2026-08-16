@@ -19,31 +19,24 @@ jobs:
         run: |
           $path = 'plugin-minimaxh3-clean\Install-Plugins.ps1'
           $text = Get-Content -LiteralPath $path -Raw
-          $needle = @'
-          function Download-ValidatedWheel($Spec, [string]$WheelDir) {
-              New-Item -ItemType Directory -Force -Path $WheelDir | Out-Null
-              $dest = Join-Path $WheelDir $Spec.FileName
-          '@
-          $replacement = @'
-          function Download-ValidatedWheel($Spec, [string]$WheelDir) {
-              New-Item -ItemType Directory -Force -Path $WheelDir | Out-Null
-              $dest = Join-Path $WheelDir $Spec.FileName
+          if ($text -notmatch 'Found local .* wheel beside installer') {
+            $insert = @'
 
-              # Browser/manual download support: put the exact validated wheel beside Install-Plugins.bat.
-              $localWheel = Join-Path $PSScriptRoot $Spec.FileName
-              if (Test-Path -LiteralPath $localWheel -PathType Leaf) {
-                  Write-Log "Found local $($Spec.Distribution) wheel beside installer: $localWheel"
-                  if (Test-ValidatedWheel $localWheel $Spec) {
-                      Write-Log "Local wheel passed size/SHA256 validation; network download skipped."
-                      return $localWheel
-                  }
-                  Write-Log "Local wheel exists but failed size/SHA256 validation; ignoring it and trying network sources." "WARN"
-              }
-          '@
-          $needle = ($needle -split "`r?`n" | ForEach-Object { $_ -replace '^          ', '' }) -join "`r`n"
-          $replacement = ($replacement -split "`r?`n" | ForEach-Object { $_ -replace '^          ', '' }) -join "`r`n"
-          if (-not $text.Contains($needle)) { throw 'Download-ValidatedWheel header not found.' }
-          $text = $text.Replace($needle, $replacement)
+    # Browser/manual download support: put the exact validated wheel beside Install-Plugins.bat.
+    $localWheel = Join-Path $PSScriptRoot $Spec.FileName
+    if (Test-Path -LiteralPath $localWheel -PathType Leaf) {
+        Write-Log "Found local $($Spec.Distribution) wheel beside installer: $localWheel"
+        if (Test-ValidatedWheel $localWheel $Spec) {
+            Write-Log "Local wheel passed size/SHA256 validation; network download skipped."
+            return $localWheel
+        }
+        Write-Log "Local wheel exists but failed size/SHA256 validation; ignoring it and trying network sources." "WARN"
+    }
+'@
+            $pattern = '(function Download-ValidatedWheel\(\$Spec, \[string\]\$WheelDir\) \{\r?\n\s*New-Item -ItemType Directory -Force -Path \$WheelDir \| Out-Null\r?\n\s*\$dest = Join-Path \$WheelDir \$Spec\.FileName)'
+            if (-not [regex]::IsMatch($text, $pattern)) { throw 'Download-ValidatedWheel header not found.' }
+            $text = [regex]::Replace($text, $pattern, '$1' + $insert, 1)
+          }
           [IO.File]::WriteAllText((Resolve-Path $path), $text, (New-Object Text.UTF8Encoding($false)))
 
           $tokens = $null
@@ -57,5 +50,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -- plugin-minimaxh3-clean/Install-Plugins.ps1
+          if (git diff --cached --quiet) { exit 0 }
           git commit -m "Prefer validated local wheels beside installer"
           git push origin HEAD:plugin-minimaxh3-clean
