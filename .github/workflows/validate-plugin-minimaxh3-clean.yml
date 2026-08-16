@@ -1,0 +1,51 @@
+name: Validate clean plugin installer
+
+on:
+  push:
+    branches: [plugin-minimaxh3-clean]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          $path = Resolve-Path 'plugin-minimaxh3-clean/Install-Plugins.ps1'
+          [void][Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
+
+      - name: Validate clean-only layout and protected runtime
+        shell: powershell
+        run: |
+          $p = Get-Content 'plugin-minimaxh3-clean/Install-Plugins.ps1' -Raw
+          if ($p -notmatch '3\.10\.11') { throw 'Python target missing' }
+          if ($p -notmatch '2\.10\.0\+cu130') { throw 'Torch target missing' }
+          if ($p -notmatch '0\.25\.0\+cu130') { throw 'torchvision target missing' }
+          if ($p -notmatch '0\.25\.0\+cu130') { throw 'torchvision target missing' }
+          if ($p -notmatch 'triton-windows') { throw 'Triton install missing' }
+          if ($p -notmatch 'sageattention') { throw 'Sage install missing' }
+          if ($p -notmatch 'patch_model\.py') { throw 'TE core patch missing' }
+          if ($p -notmatch 'SAGE_ACCEL_SMOKE_OK') { throw 'Sage smoke test missing' }
+          if ($p -match 'resources\\plugins-source\.zip') { throw 'Bundled plugin resource leaked into clean installer' }
+          if (Test-Path 'plugin-minimaxh3-clean/resources') { throw 'resources directory must not exist' }
+          if (Test-Path 'plugin-minimaxh3-clean/wheels') { throw 'wheels directory must not exist' }
+          if (Test-Path 'plugin-minimaxh3-clean/plugin-manifest.json') { throw 'manifest must not exist' }
+          $files = @(Get-ChildItem 'plugin-minimaxh3-clean' -File)
+          if ($files.Count -ne 3) { throw "Expected exactly 3 files, found $($files.Count)" }
+
+      - name: Confirm stale Manager dependency is absent from pinned source
+        shell: powershell
+        run: |
+          $url = 'https://raw.githubusercontent.com/Comfy-Org/ComfyUI-Manager/fe1193c0c8168904e32d814190ba7f2ba2ad7581/requirements.txt'
+          $req = (Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 60).Content
+          if ($req -match '(?im)^matrix-client') { throw 'Pinned Manager still uses matrix-client' }
+          if ($req -notmatch '(?im)^matrix-nio\s*$') { throw 'Pinned Manager does not use matrix-nio' }
