@@ -1,0 +1,61 @@
+name: Build plugin source resource
+
+on:
+  push:
+    branches: [plugin-minimaxh3-current]
+    paths:
+      - '.github/workflows/build-plugin-source-resource.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout installer branch
+        uses: actions/checkout@v4
+
+      - name: Checkout validated plugin source snapshot
+        uses: actions/checkout@v4
+        with:
+          repository: dudulu2/MiniMax-H3-OneClick
+          ref: 2f6e2b4ae45852d2f8355bfea338e1ab80676964
+          path: _source
+
+      - name: Build minimal plugin source resource
+        shell: powershell
+        run: |
+          $src = Join-Path $PWD '_source\step2-plugin-pack'
+          $stage = Join-Path $PWD '_plugin_resource\plugins'
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          $plugins = @(
+            'comfyui_essentials',
+            'comfyui-crystools',
+            'comfyui-custom-scripts',
+            'comfyui-manager',
+            'comfyui-VideoHelperSuite',
+            'rgthree-comfy',
+            'comfyui-minimax-h3-audio-T8',
+            'comfyui-minimax-h3-blockcache-T8',
+            'ComfyUI-MiniMaxH3-AVCache-CN',
+            'TE-Speed-MiniMaxH3-OSS',
+            'SageAttention-MiniMaxH3-Safe'
+          )
+          foreach ($name in $plugins) {
+            $from = Join-Path $src $name
+            if (-not (Test-Path -LiteralPath $from -PathType Container)) { throw "Missing source plugin: $name" }
+            Copy-Item -LiteralPath $from -Destination (Join-Path $stage $name) -Recurse -Force
+          }
+          $zip = Join-Path $PWD 'plugins-source.zip'
+          Compress-Archive -LiteralPath (Join-Path $PWD '_plugin_resource\plugins') -DestinationPath $zip -CompressionLevel Optimal -Force
+          Get-Item $zip | Format-List Name,Length,FullName
+
+      - name: Upload plugin source resource
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-source-resource
+          path: plugins-source.zip
+          if-no-files-found: error
+          retention-days: 7
