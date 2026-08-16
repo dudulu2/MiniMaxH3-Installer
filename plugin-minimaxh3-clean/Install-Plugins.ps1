@@ -238,20 +238,22 @@ function Invoke-DownloadOne([string]$Url, [string]$Destination, [string]$Working
     Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
     $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
     if ($curl) {
-        $args = @("-L", "--fail", "--silent", "--show-error", "--retry", "3", "--retry-delay", "2", "--connect-timeout", "20", "--max-time", "300", "-o", $Destination, $Url)
+        # One URL gets one bounded attempt. The caller owns source failover.
+        # This avoids spending several minutes retrying a dead GitHub route.
+        $args = @("-L", "--fail", "--silent", "--show-error", "--connect-timeout", "12", "--max-time", "90", "-o", $Destination, $Url)
         $code = Invoke-Native $curl.Source $args $WorkingDirectory -AllowFailure
         if ($code -eq 0 -and (Test-Path -LiteralPath $Destination -PathType Leaf) -and (Get-Item -LiteralPath $Destination).Length -gt 0) {
-            return
+  return
         }
         Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+        throw "curl download failed; switching source: $Url"
     }
 
-    Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $Destination -TimeoutSec 300
+    Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $Destination -TimeoutSec 90
     if (-not (Test-Path -LiteralPath $Destination -PathType Leaf) -or (Get-Item -LiteralPath $Destination).Length -le 0) {
         throw "Downloaded file is empty: $Url"
     }
 }
-
 function Test-ZipFile([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
     $stream = $null
@@ -274,10 +276,10 @@ function Download-RepoArchive($Spec, [string]$StageRoot) {
     $extract = Join-Path $StageRoot ($safe + "-extract")
     $githubUrl = "https://github.com/$($Spec.Repo)/archive/$($Spec.Commit).zip"
     $urls = @(
-        $githubUrl,
         "https://codeload.github.com/$($Spec.Repo)/zip/$($Spec.Commit)",
-        "https://gh-proxy.com/$githubUrl",
-        "https://ghfast.top/$githubUrl"
+        $githubUrl,
+        "https://ghfast.top/$githubUrl",
+        "https://gh-proxy.com/$githubUrl"
     )
 
     $ok = $false
