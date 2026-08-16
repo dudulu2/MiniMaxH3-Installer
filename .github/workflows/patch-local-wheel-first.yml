@@ -1,0 +1,61 @@
+name: Patch local wheel first
+
+on:
+  push:
+    branches: [plugin-minimaxh3-clean]
+    paths:
+      - '.github/workflows/patch-local-wheel-first.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch installer
+        shell: powershell
+        run: |
+          $path = 'plugin-minimaxh3-clean\Install-Plugins.ps1'
+          $text = Get-Content -LiteralPath $path -Raw
+          $needle = @'
+          function Download-ValidatedWheel($Spec, [string]$WheelDir) {
+              New-Item -ItemType Directory -Force -Path $WheelDir | Out-Null
+              $dest = Join-Path $WheelDir $Spec.FileName
+          '@
+          $replacement = @'
+          function Download-ValidatedWheel($Spec, [string]$WheelDir) {
+              New-Item -ItemType Directory -Force -Path $WheelDir | Out-Null
+              $dest = Join-Path $WheelDir $Spec.FileName
+
+              # Browser/manual download support: put the exact validated wheel beside Install-Plugins.bat.
+              $localWheel = Join-Path $PSScriptRoot $Spec.FileName
+              if (Test-Path -LiteralPath $localWheel -PathType Leaf) {
+                  Write-Log "Found local $($Spec.Distribution) wheel beside installer: $localWheel"
+                  if (Test-ValidatedWheel $localWheel $Spec) {
+                      Write-Log "Local wheel passed size/SHA256 validation; network download skipped."
+                      return $localWheel
+                  }
+                  Write-Log "Local wheel exists but failed size/SHA256 validation; ignoring it and trying network sources." "WARN"
+              }
+          '@
+          $needle = ($needle -split "`r?`n" | ForEach-Object { $_ -replace '^          ', '' }) -join "`r`n"
+          $replacement = ($replacement -split "`r?`n" | ForEach-Object { $_ -replace '^          ', '' }) -join "`r`n"
+          if (-not $text.Contains($needle)) { throw 'Download-ValidatedWheel header not found.' }
+          $text = $text.Replace($needle, $replacement)
+          [IO.File]::WriteAllText((Resolve-Path $path), $text, (New-Object Text.UTF8Encoding($false)))
+
+          $tokens = $null
+          $errors = $null
+          [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors)
+          if ($errors.Count -gt 0) { $errors | Format-List | Out-String | Write-Error; exit 1 }
+
+      - name: Commit
+        shell: powershell
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- plugin-minimaxh3-clean/Install-Plugins.ps1
+          git commit -m "Prefer validated local wheels beside installer"
+          git push origin HEAD:plugin-minimaxh3-clean
