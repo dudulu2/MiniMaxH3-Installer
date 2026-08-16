@@ -66,7 +66,6 @@ jobs:
           }
 
           '@
-          # Strip workflow indentation from the here-string before writing it.
           $replacement = ($replacement -split "`r?`n" | ForEach-Object { $_ -replace '^          ', '' }) -join "`r`n"
           $text = $text.Substring(0, $start) + $replacement + $text.Substring($end)
           [IO.File]::WriteAllText((Resolve-Path $path), $text, (New-Object Text.UTF8Encoding($false)))
@@ -154,5 +153,6 @@ jobs:
             exit 0
           }
           git commit -m "Refresh Manager snapshot and harden acceleration probe"
+          git reset --hard HEAD
           git pull --rebase origin plugin-minimaxh3-current
           git push origin HEAD:plugin-minimaxh3-current
