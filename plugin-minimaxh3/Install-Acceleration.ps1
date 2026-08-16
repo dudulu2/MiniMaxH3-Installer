@@ -58,7 +58,7 @@ function Invoke-Native([string]$FilePath, [string[]]$Arguments, [string]$Working
     foreach ($line in $output) {
         if (-not [string]::IsNullOrWhiteSpace([string]$line)) { Write-Log ([string]$line) "RUN" }
     }
-    if ($code -ne 0 -and -not $AllowFailure) { throw "Command failed with exit code $code: $FilePath $($Arguments -join ' ')" }
+    if ($code -ne 0 -and -not $AllowFailure) { throw "Command failed with exit code ${code}: $FilePath $($Arguments -join ' ')" }
     return $code
 }
 
