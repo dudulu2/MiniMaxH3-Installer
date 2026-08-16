@@ -406,20 +406,49 @@ function Test-ValidatedWheel([string]$Path, $Spec) {
 function Download-ValidatedWheel($Spec, [string]$WheelDir) {
     New-Item -ItemType Directory -Force -Path $WheelDir | Out-Null
     $dest = Join-Path $WheelDir $Spec.FileName
+
     foreach ($url in $Spec.Urls) {
         try {
-            Write-Log "Downloading validated $($Spec.Distribution) wheel: $url"
-            Invoke-DownloadOne $url $dest $WheelDir
-            if (-not (Test-ValidatedWheel $dest $Spec)) { throw "size/SHA256 verification failed" }
-            return $dest
+  Write-Log "Downloading validated $($Spec.Distribution) wheel: $url"
+  Invoke-DownloadOne $url $dest $WheelDir
+  if (-not (Test-ValidatedWheel $dest $Spec)) { throw "size/SHA256 verification failed" }
+  return $dest
         } catch {
-            Write-Log "Wheel source failed: $($_.Exception.Message)" "WARN"
-            Remove-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue
+  Write-Log "Wheel source failed: $($_.Exception.Message)" "WARN"
+  Remove-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue
         }
     }
+
+    $package = "$($Spec.Distribution)==$($Spec.Version)"
+    $indexes = @(
+        "https://pypi.tuna.tsinghua.edu.cn/simple",
+        "https://pypi.org/simple"
+    )
+    foreach ($index in $indexes) {
+        try {
+  Write-Log "Direct wheel URLs failed; trying pip download for $package from $index" "WARN"
+  Remove-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue
+  $args = @(
+      "-m", "pip", "download",
+      "--disable-pip-version-check",
+      "--no-deps",
+      "--only-binary=:all:",
+      "--dest", $WheelDir,
+      "-i", $index,
+      $package
+  )
+  $code = Invoke-Native $script:PythonExe $args $WheelDir -AllowFailure
+  if ($code -ne 0) { throw "pip download failed with exit code $code" }
+  if (-not (Test-ValidatedWheel $dest $Spec)) { throw "downloaded wheel did not match validated size/SHA256" }
+  return $dest
+        } catch {
+  Write-Log "Pip wheel source failed: $($_.Exception.Message)" "WARN"
+  Remove-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     throw "Could not download validated wheel: $($Spec.FileName)"
 }
-
 function Install-ExactWheel([string]$Python, $Spec, [string]$WheelDir, [string]$Root) {
     $current = Get-DistributionVersion $Python $Spec.Distribution $Root
     if ($current -eq [string]$Spec.Version) {
@@ -468,6 +497,7 @@ print("SAGE_ACCEL_SMOKE_OK")
 
 $root = Resolve-MiniMaxRoot $TargetRoot
 $python = Join-Path $root "runtime\venv\Scripts\python.exe"
+$script:PythonExe = $python
 $comfy = Join-Path $root "ComfyUI"
 $customNodes = Join-Path $comfy "custom_nodes"
 $workflows = Join-Path $comfy "user\default\workflows"
