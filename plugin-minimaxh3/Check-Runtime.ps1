@@ -57,7 +57,7 @@ function Invoke-PythonProbe {
     $oldPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
-        $raw = @(& $Python @Arguments 2>$null)
+        $raw = @(& $Python @Arguments 2>&1)
         $exitCode = [int]$LASTEXITCODE
     } finally {
         $ErrorActionPreference = $oldPreference
@@ -72,21 +72,43 @@ try {
     $root = Resolve-MiniMaxRoot -RequestedRoot $TargetRoot
     $python = Join-Path $root "runtime\venv\Scripts\python.exe"
 
+    # Only torch needs to be imported for the CUDA runtime check. Read the
+    # torchvision/torchaudio versions from installed distribution metadata so
+    # optional DLL/image/audio initialization cannot make the guard fail before
+    # we can explain the real problem.
     $code = @'
-import json, platform, torch, torchvision, torchaudio
+import json, platform, importlib.metadata as md
+import torch
+
+def dist_version(name):
+    try:
+        return md.version(name)
+    except Exception:
+        return ""
+
 print(json.dumps({
   "python": platform.python_version(),
   "torch": torch.__version__,
-  "torchvision": torchvision.__version__,
-  "torchaudio": torchaudio.__version__,
+  "torchvision": dist_version("torchvision"),
+  "torchaudio": dist_version("torchaudio"),
   "cuda": str(torch.version.cuda or ""),
   "cuda_available": bool(torch.cuda.is_available())
 }))
 '@
     $probe = Invoke-PythonProbe -Python $python -Arguments @("-c", $code)
-    if ($probe.ExitCode -ne 0) { throw "Could not inspect the installed Python/PyTorch runtime." }
-    $json = $probe.Output | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Last 1
-    if (-not $json) { throw "Runtime probe returned no data." }
+    if ($probe.ExitCode -ne 0) {
+        $details = @($probe.Output | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        $tail = if ($details.Count -gt 8) { @($details | Select-Object -Last 8) } else { $details }
+        $detailText = ($tail -join " | ").Trim()
+        if ([string]::IsNullOrWhiteSpace($detailText)) { $detailText = "Python exited with code $($probe.ExitCode) and produced no diagnostic output." }
+        throw "Could not inspect the installed Python/PyTorch runtime. Python error: $detailText"
+    }
+
+    $json = $probe.Output | Where-Object { $_ -match '^\s*\{' } | Select-Object -Last 1
+    if (-not $json) {
+        $detailText = (@($probe.Output | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join " | ").Trim()
+        throw "Runtime probe returned no JSON data. Output: $detailText"
+    }
     $runtime = $json | ConvertFrom-Json
 
     $failures = @()
