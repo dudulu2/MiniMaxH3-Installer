@@ -225,7 +225,9 @@ with open(sys.argv[2], "w", encoding="utf-8") as f:
         $code | Set-Content -LiteralPath $probe -Encoding UTF8
         $null = Invoke-Native $Python @($probe, $Distribution, $result) $Root -Quiet
         if (-not (Test-Path -LiteralPath $result -PathType Leaf)) { return $null }
-        $value = (Get-Content -LiteralPath $result -Raw).Trim()
+        $rawValue = Get-Content -LiteralPath $result -Raw -ErrorAction SilentlyContinue
+        if ($null -eq $rawValue) { return $null }
+        $value = ([string]$rawValue).Trim()
         if ([string]::IsNullOrWhiteSpace($value)) { return $null }
         return $value
     } finally {
