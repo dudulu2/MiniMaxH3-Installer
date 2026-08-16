@@ -42,8 +42,8 @@ jobs:
           }
 
           $expected = @{
-            compatibility = [int64]42470585471
-            balanced_4090_32gb = [int64]42458411463
+            compatibility = [int64]53924785072
+            balanced_4090_32gb = [int64]53912611064
             quality_64gb = [int64]73180129632
           }
           foreach ($profile in $script:Profiles) {
