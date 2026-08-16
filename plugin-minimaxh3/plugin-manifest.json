@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "target": {
     "python": "3.10.11",
     "python_tag": "cp310",
@@ -31,9 +31,35 @@
     "comfyui-minimax-h3-blockcache-T8",
     "ComfyUI-MiniMaxH3-AVCache-CN"
   ],
+  "validated_acceleration": {
+    "te_speed": {
+      "enabled_by_default": true,
+      "plugin": "TE-Speed-MiniMaxH3-OSS",
+      "patch_version": 3,
+      "requires_core_patch": true,
+      "notes": "Use the validated V3 patch_model.py before loading the TE-Speed node. The earlier no-block_loop warning only occurs when the node is copied without running the safe core patch installer."
+    },
+    "sageattention": {
+      "enabled_by_default": true,
+      "plugin": "SageAttention-MiniMaxH3-Safe",
+      "triton_windows": {
+        "version": "3.6.0.post25",
+        "filename": "triton_windows-3.6.0.post25-cp310-cp310-win_amd64.whl",
+        "size": 47380144,
+        "sha256": "8c45b7f83eecb71c3aeded1da7914af0050bddda710f47a2cfae936d55fae0ca",
+        "url": "https://files.pythonhosted.org/packages/ba/ca/6d38c374a427a360dc4c7687f15fdb217dd4ca3bf87d0ad31f9818e22188/triton_windows-3.6.0.post25-cp310-cp310-win_amd64.whl"
+      },
+      "sageattention": {
+        "version": "2.2.0+cu130torch2.10.0andhigher.post6",
+        "filename": "sageattention-2.2.0+cu130torch2.10.0andhigher.post6-cp310-abi3-win_amd64.whl",
+        "size": 16656067,
+        "sha256": "1635283f5c01ec3cda58a784d0d7eabbcaffaf9511d1b263db4750e1ed7958bb",
+        "url": "https://github.com/woct0rdho/SageAttention/releases/download/v2.2.0-windows.post6/sageattention-2.2.0%2Bcu130torch2.10.0andhigher.post6-cp310-abi3-win_amd64.whl"
+      },
+      "install_policy": "Install exact validated wheels with --no-deps so torch/torchvision/torchaudio cannot be replaced."
+    }
+  },
   "excluded_plugins": {
-    "minimax_h3_workflow_autoload": "Owned by MiniMaxH3-Installer Step 1; do not overwrite its generated workflow autoload state.",
-    "TE-Speed-MiniMaxH3-OSS": "Not enabled by default because the fixed target H3 core does not expose the block_loop hooks used by this optimization.",
-    "SageAttention-MiniMaxH3-Safe": "Deferred until a cp310 / Torch 2.10 / CUDA 13 Triton+Sage runtime is separately validated. The base runtime must never be upgraded for this plugin."
+    "minimax_h3_workflow_autoload": "Owned by MiniMaxH3-Installer Step 1; do not overwrite its generated workflow autoload state."
   }
 }
