@@ -19,7 +19,8 @@ jobs:
         run: |
           foreach ($path in @(
             'plugin-minimaxh3/Check-Runtime.ps1',
-            'plugin-minimaxh3/Install-Plugins.ps1'
+            'plugin-minimaxh3/Install-Plugins.ps1',
+            'plugin-minimaxh3/Install-Acceleration.ps1'
           )) {
             $tokens = $null
             $errors = $null
@@ -63,11 +64,17 @@ jobs:
           )) {
             if ($required -notin $managed) { throw "Managed plugin missing: $required" }
           }
-          foreach ($forbidden in @('minimax_h3_workflow_autoload','TE-Speed-MiniMaxH3-OSS','SageAttention-MiniMaxH3-Safe')) {
-            if ($forbidden -in $managed) { throw "Current-runtime profile must not auto-install: $forbidden" }
-          }
+          if ('minimax_h3_workflow_autoload' -in $managed) { throw 'Step1 workflow autoload must remain owned by MiniMaxH3-Installer.' }
 
-          foreach ($path in @('plugin-minimaxh3/Check-Runtime.ps1','plugin-minimaxh3/Install-Plugins.ps1')) {
+          if (-not $manifest.validated_acceleration.te_speed.enabled_by_default) { throw 'Validated TE-Speed must be enabled by default.' }
+          if ([string]$manifest.validated_acceleration.te_speed.plugin -ne 'TE-Speed-MiniMaxH3-OSS') { throw 'Unexpected TE-Speed plugin.' }
+          if (-not $manifest.validated_acceleration.sageattention.enabled_by_default) { throw 'Validated Sage must be enabled by default.' }
+          if ([string]$manifest.validated_acceleration.sageattention.triton_windows.version -ne '3.6.0.post25') { throw 'Unexpected Triton version.' }
+          if ([string]$manifest.validated_acceleration.sageattention.triton_windows.filename -ne 'triton_windows-3.6.0.post25-cp310-cp310-win_amd64.whl') { throw 'Unexpected Triton wheel.' }
+          if ([string]$manifest.validated_acceleration.sageattention.sageattention.version -ne '2.2.0+cu130torch2.10.0andhigher.post6') { throw 'Unexpected SageAttention version.' }
+          if ([string]$manifest.validated_acceleration.sageattention.sageattention.filename -ne 'sageattention-2.2.0+cu130torch2.10.0andhigher.post6-cp310-abi3-win_amd64.whl') { throw 'Unexpected SageAttention wheel.' }
+
+          foreach ($path in @('plugin-minimaxh3/Check-Runtime.ps1','plugin-minimaxh3/Install-Plugins.ps1','plugin-minimaxh3/Install-Acceleration.ps1')) {
             $text = Get-Content $path -Raw
             if ($text.Contains('2.12.0+cu130')) { throw "$path still contains the OneClick Torch 2.12 target." }
             if ($text.Contains('3.13.9')) { throw "$path still contains the OneClick Python 3.13 target." }
@@ -84,3 +91,21 @@ jobs:
           )) {
             if (-not $installerText.Contains($needle.Replace('\\','\'))) { throw "Installer safety contract missing: $needle" }
           }
+
+          $accelText = Get-Content 'plugin-minimaxh3/Install-Acceleration.ps1' -Raw
+          foreach ($needle in @(
+            'patch_model.py',
+            '--preflight',
+            'tespeed_workflow_patch.py',
+            '--no-deps',
+            '--no-index',
+            'triton-windows',
+            'sageattention',
+            'SAGE_ACCEL_SMOKE_OK',
+            'Assert-Runtime $root'
+          )) {
+            if (-not $accelText.Contains($needle)) { throw "Acceleration safety contract missing: $needle" }
+          }
+
+          $bat = Get-Content 'plugin-minimaxh3/Install-Plugins.bat' -Raw
+          if (-not $bat.Contains('Install-Acceleration.ps1')) { throw 'BAT must install validated acceleration after base plugins.' }
