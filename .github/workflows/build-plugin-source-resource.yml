@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -48,7 +48,9 @@ jobs:
             if (-not (Test-Path -LiteralPath $from -PathType Container)) { throw "Missing source plugin: $name" }
             Copy-Item -LiteralPath $from -Destination (Join-Path $stage $name) -Recurse -Force
           }
-          $zip = Join-Path $PWD 'plugins-source.zip'
+          $resources = Join-Path $PWD 'plugin-minimaxh3\resources'
+          New-Item -ItemType Directory -Force -Path $resources | Out-Null
+          $zip = Join-Path $resources 'plugins-source.zip'
           Compress-Archive -LiteralPath (Join-Path $PWD '_plugin_resource\plugins') -DestinationPath $zip -CompressionLevel Optimal -Force
           Get-Item $zip | Format-List Name,Length,FullName
 
@@ -56,6 +58,19 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: plugin-source-resource
-          path: plugins-source.zip
+          path: plugin-minimaxh3/resources/plugins-source.zip
           if-no-files-found: error
           retention-days: 7
+
+      - name: Commit resource to branch
+        shell: powershell
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- plugin-minimaxh3/resources/plugins-source.zip
+          if (git diff --cached --quiet) {
+            Write-Host 'Resource archive is already current.'
+            exit 0
+          }
+          git commit -m "Bundle plugin source resource"
+          git push origin HEAD:plugin-minimaxh3-current
