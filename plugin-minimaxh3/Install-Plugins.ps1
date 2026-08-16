@@ -200,7 +200,7 @@ function Install-RequirementsSafe {
         )
         $code = Invoke-Native -FilePath $Python -Arguments $args -WorkingDirectory $Root
         if ($code -eq 0) { return }
-        Write-InstallLog "Dependency source failed for $Label: $index" "WARN"
+        Write-InstallLog "Dependency source failed for ${Label}: $index" "WARN"
     }
     throw "Dependency installation failed for $Label."
 }
