@@ -21,26 +21,6 @@ jobs:
           $path = 'plugin-minimaxh3-clean\Install-Plugins.ps1'
           $text = Get-Content -LiteralPath $path -Raw
 
-          $old = @'
-          function Invoke-DownloadOne([string]$Url, [string]$Destination, [string]$WorkingDirectory) {
-              Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
-              $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
-              if ($curl) {
-                  $args = @("-L", "--fail", "--silent", "--show-error", "--retry", "3", "--retry-delay", "2", "--connect-timeout", "20", "--max-time", "300", "-o", $Destination, $Url)
-                  $code = Invoke-Native $curl.Source $args $WorkingDirectory -AllowFailure
-                  if ($code -eq 0 -and (Test-Path -LiteralPath $Destination -PathType Leaf) -and (Get-Item -LiteralPath $Destination).Length -gt 0) {
-                      return
-                  }
-                  Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
-              }
-
-              Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $Destination -TimeoutSec 300
-              if (-not (Test-Path -LiteralPath $Destination -PathType Leaf) -or (Get-Item -LiteralPath $Destination).Length -le 0) {
-                  throw "Downloaded file is empty: $Url"
-              }
-          }
-          '@
-
           $new = @'
           function Invoke-DownloadOne([string]$Url, [string]$Destination, [string]$WorkingDirectory) {
               Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
@@ -63,20 +43,11 @@ jobs:
               }
           }
           '@
-
-          $old = ($old -split "`r?`n" | ForEach-Object { $_ -replace '^          ', '' }) -join "`r`n"
           $new = ($new -split "`r?`n" | ForEach-Object { $_ -replace '^          ', '' }) -join "`r`n"
-          if (-not $text.Contains($old)) { throw 'Old Invoke-DownloadOne block not found.' }
-          $text = $text.Replace($old, $new)
+          $pattern = '(?s)function Invoke-DownloadOne.*?(?=\r?\nfunction Test-ZipFile)'
+          if (-not [regex]::IsMatch($text, $pattern)) { throw 'Invoke-DownloadOne block not found.' }
+          $text = [regex]::Replace($text, $pattern, [System.Text.RegularExpressions.MatchEvaluator]{ param($m) $new.TrimEnd() })
 
-          $oldUrls = @'
-              $urls = @(
-                  $githubUrl,
-                  "https://codeload.github.com/$($Spec.Repo)/zip/$($Spec.Commit)",
-                  "https://gh-proxy.com/$githubUrl",
-                  "https://ghfast.top/$githubUrl"
-              )
-          '@
           $newUrls = @'
               $urls = @(
                   "https://codeload.github.com/$($Spec.Repo)/zip/$($Spec.Commit)",
@@ -85,10 +56,10 @@ jobs:
                   "https://gh-proxy.com/$githubUrl"
               )
           '@
-          $oldUrls = ($oldUrls -split "`r?`n" | ForEach-Object { $_ -replace '^          ', '' }) -join "`r`n"
           $newUrls = ($newUrls -split "`r?`n" | ForEach-Object { $_ -replace '^          ', '' }) -join "`r`n"
-          if (-not $text.Contains($oldUrls)) { throw 'Old archive URL block not found.' }
-          $text = $text.Replace($oldUrls, $newUrls)
+          $urlPattern = '(?s)(function Download-RepoArchive.*?\$githubUrl = [^\r\n]+\r?\n)\s*\$urls = @\(.*?\)\r?\n'
+          if (-not [regex]::IsMatch($text, $urlPattern)) { throw 'Archive URL block not found.' }
+          $text = [regex]::Replace($text, $urlPattern, [System.Text.RegularExpressions.MatchEvaluator]{ param($m) $m.Groups[1].Value + $newUrls + "`r`n" }, 1)
 
           [IO.File]::WriteAllText((Resolve-Path $path), $text, (New-Object Text.UTF8Encoding($false)))
 
