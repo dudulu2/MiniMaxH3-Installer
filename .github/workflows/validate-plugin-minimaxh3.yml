@@ -114,8 +114,8 @@ jobs:
 
           $installerText = Get-Content 'plugin-minimaxh3/Install-Plugins.ps1' -Raw
           foreach ($needle in @(
-            'resources/plugins-source.zip',
             'Get-BundledSourceArchive',
+            'source.resource',
             'wheels\dependencies',
             '--no-index',
             '--find-links',
@@ -132,6 +132,7 @@ jobs:
           $accelText = Get-Content 'plugin-minimaxh3/Install-Acceleration.ps1' -Raw
           foreach ($needle in @(
             'Get-BundledSourceArchive',
+            'source.resource',
             'patch_model.py',
             '--preflight',
             'tespeed_workflow_patch.py',
